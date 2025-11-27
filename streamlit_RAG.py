@@ -1557,12 +1557,15 @@ with tab_confluence:
                 st.markdown("---")
                 st.markdown("### 🚀 Lancer la synchronisation")
 
-                # Sélection de la base cible
-                target_base = st.selectbox(
-                    "📂 Base FAISS cible",
-                    options=bases if bases else ["(Aucune base disponible)"],
-                    help="Base FAISS dans laquelle ingérer les pages Confluence"
-                )
+                # Base FAISS dédiée pour Confluence
+                CONFLUENCE_BASE_NAME = "CONFLUENCE"
+                confluence_db_path = os.path.join(BASE_ROOT_DIR, CONFLUENCE_BASE_NAME)
+
+                # Vérifier si la base existe et afficher le statut
+                if os.path.exists(confluence_db_path):
+                    st.success(f"📂 Base FAISS dédiée : **{CONFLUENCE_BASE_NAME}** (existante)")
+                else:
+                    st.info(f"📂 Base FAISS dédiée : **{CONFLUENCE_BASE_NAME}** (sera créée automatiquement)")
 
                 col_sync1, col_sync2 = st.columns(2)
 
@@ -1572,7 +1575,7 @@ with tab_confluence:
                         type="primary",
                         use_container_width=True,
                         help="Recharge toutes les pages de l'espace",
-                        disabled=not conf_config.is_valid()[0] or not bases
+                        disabled=not conf_config.is_valid()[0]
                     )
 
                 with col_sync2:
@@ -1580,7 +1583,7 @@ with tab_confluence:
                         "📥 Synchronisation incrémentale",
                         use_container_width=True,
                         help="Ne charge que les pages nouvelles ou modifiées",
-                        disabled=not conf_config.is_valid()[0] or not bases
+                        disabled=not conf_config.is_valid()[0]
                     )
 
                 # Exécution de la synchronisation
@@ -1588,8 +1591,6 @@ with tab_confluence:
                     is_valid, error_msg = conf_config.is_valid()
                     if not is_valid:
                         st.error(f"❌ Configuration invalide : {error_msg}")
-                    elif not bases:
-                        st.error("❌ Aucune base FAISS disponible")
                     else:
                         st.markdown("---")
                         progress_bar = st.progress(0)
@@ -1602,6 +1603,12 @@ with tab_confluence:
                             status_text.text(message)
 
                         try:
+                            # Créer la base CONFLUENCE si elle n'existe pas
+                            if not os.path.exists(confluence_db_path):
+                                os.makedirs(confluence_db_path, exist_ok=True)
+                                with log_container:
+                                    st.info(f"📂 Base FAISS '{CONFLUENCE_BASE_NAME}' créée")
+
                             # Créer le client
                             status_text.text("🔌 Connexion à Confluence...")
                             client = ConfluenceClient(conf_config)
@@ -1626,9 +1633,9 @@ with tab_confluence:
                                 with log_container:
                                     st.info(f"📄 CSV généré : {csv_path}")
 
-                                # Lancer l'ingestion
+                                # Lancer l'ingestion dans la base CONFLUENCE dédiée
                                 status_text.text("🚀 Ingestion dans FAISS...")
-                                db_path = os.path.join(BASE_ROOT_DIR, target_base)
+                                db_path = confluence_db_path
                                 collection_name = f"confluence_{conf_config.space_key}"
 
                                 # Charger le CSV et ingérer
