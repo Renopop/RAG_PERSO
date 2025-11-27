@@ -1,23 +1,33 @@
 # config_manager.py
 """
-Gestionnaire de configuration pour les répertoires de stockage.
+Gestionnaire de configuration pour les répertoires de stockage et les modèles.
 
 Ce module permet de:
 - Charger/sauvegarder la configuration des chemins
 - Valider l'existence des répertoires
 - Proposer la création des répertoires manquants
 - Afficher une interface de configuration si nécessaire
+- Gérer la configuration des modèles locaux (embeddings, LLM, reranker)
+- Supporter le mode local vs API
 """
 
 import os
 import json
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
+from enum import Enum
 
 
 # Fichier de configuration local
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
+
+
+class ModelMode(Enum):
+    """Mode d'utilisation des modèles."""
+    API = "api"      # Utilise les APIs distantes (Snowflake, DALLEM)
+    LOCAL = "local"  # Utilise les modèles locaux
+
 
 # Valeurs par défaut (chemins réseau PROP)
 DEFAULT_CONFIG = {
@@ -27,14 +37,68 @@ DEFAULT_CONFIG = {
     "feedback_dir": r"N:\DA\SOC\RDA\ORG\DGT\POLE-SYSTEME\ENERGIE\RESERVE\PROP\Knowledge\IA_PROP\FAISS_DATABASE\Feedbacks",
 }
 
+# Configuration par défaut pour le mode local
+DEFAULT_LOCAL_CONFIG = {
+    "base_root_dir": r"D:\FAISS_DATABASE\BaseDB",
+    "csv_import_dir": r"D:\FAISS_DATABASE\CSV_Ingestion",
+    "csv_export_dir": r"D:\FAISS_DATABASE\Fichiers_Tracking_CSV",
+    "feedback_dir": r"D:\FAISS_DATABASE\Feedbacks",
+    "local_embedding_path": r"D:\IA_Test\models\BAAI\bge-m3",
+    "local_llm_path": r"D:\IA_Test\models\mistralai\Mistral-7B-Instruct-v0.3",
+    "local_reranker_path": r"D:\IA_Test\models\BAAI\bge-reranker-v2-m3",
+}
+
+
+@dataclass
+class LocalModelsConfig:
+    """Configuration des modèles locaux."""
+    embedding_path: str = ""
+    llm_path: str = ""
+    reranker_path: str = ""
+
+    def to_dict(self) -> Dict[str, str]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, str]) -> "LocalModelsConfig":
+        return cls(
+            embedding_path=data.get("local_embedding_path", ""),
+            llm_path=data.get("local_llm_path", ""),
+            reranker_path=data.get("local_reranker_path", ""),
+        )
+
+    def has_any_model(self) -> bool:
+        """Vérifie si au moins un modèle local est configuré."""
+        return bool(self.embedding_path or self.llm_path or self.reranker_path)
+
+    def validate_paths(self) -> Dict[str, Tuple[bool, str]]:
+        """Valide que les chemins des modèles existent."""
+        results = {}
+        if self.embedding_path:
+            exists = os.path.exists(self.embedding_path)
+            results["embedding"] = (exists, self.embedding_path if exists else f"Non trouvé: {self.embedding_path}")
+        if self.llm_path:
+            exists = os.path.exists(self.llm_path)
+            results["llm"] = (exists, self.llm_path if exists else f"Non trouvé: {self.llm_path}")
+        if self.reranker_path:
+            exists = os.path.exists(self.reranker_path)
+            results["reranker"] = (exists, self.reranker_path if exists else f"Non trouvé: {self.reranker_path}")
+        return results
+
 
 @dataclass
 class StorageConfig:
-    """Configuration des répertoires de stockage."""
+    """Configuration des répertoires de stockage et des modèles."""
     base_root_dir: str
     csv_import_dir: str
     csv_export_dir: str
     feedback_dir: str
+    # Mode de fonctionnement (api ou local)
+    model_mode: str = "api"
+    # Configuration des modèles locaux
+    local_embedding_path: str = ""
+    local_llm_path: str = ""
+    local_reranker_path: str = ""
 
     def to_dict(self) -> Dict[str, str]:
         return asdict(self)
@@ -46,6 +110,36 @@ class StorageConfig:
             csv_import_dir=data.get("csv_import_dir", DEFAULT_CONFIG["csv_import_dir"]),
             csv_export_dir=data.get("csv_export_dir", DEFAULT_CONFIG["csv_export_dir"]),
             feedback_dir=data.get("feedback_dir", DEFAULT_CONFIG["feedback_dir"]),
+            model_mode=data.get("model_mode", "api"),
+            local_embedding_path=data.get("local_embedding_path", ""),
+            local_llm_path=data.get("local_llm_path", ""),
+            local_reranker_path=data.get("local_reranker_path", ""),
+        )
+
+    def is_local_mode(self) -> bool:
+        """Retourne True si le mode local est activé."""
+        return self.model_mode == "local"
+
+    def get_local_models_config(self) -> LocalModelsConfig:
+        """Retourne la configuration des modèles locaux."""
+        return LocalModelsConfig(
+            embedding_path=self.local_embedding_path,
+            llm_path=self.local_llm_path,
+            reranker_path=self.local_reranker_path,
+        )
+
+    @classmethod
+    def create_local_config(cls) -> "StorageConfig":
+        """Crée une configuration pour le mode local avec les valeurs par défaut."""
+        return cls(
+            base_root_dir=DEFAULT_LOCAL_CONFIG["base_root_dir"],
+            csv_import_dir=DEFAULT_LOCAL_CONFIG["csv_import_dir"],
+            csv_export_dir=DEFAULT_LOCAL_CONFIG["csv_export_dir"],
+            feedback_dir=DEFAULT_LOCAL_CONFIG["feedback_dir"],
+            model_mode="local",
+            local_embedding_path=DEFAULT_LOCAL_CONFIG["local_embedding_path"],
+            local_llm_path=DEFAULT_LOCAL_CONFIG["local_llm_path"],
+            local_reranker_path=DEFAULT_LOCAL_CONFIG["local_reranker_path"],
         )
 
 
@@ -371,3 +465,185 @@ def get_csv_export_dir() -> str:
 def get_feedback_dir() -> str:
     """Retourne le répertoire des feedbacks."""
     return load_config().feedback_dir
+
+
+# =====================================================================
+#  FONCTIONS POUR LES MODÈLES LOCAUX
+# =====================================================================
+
+def is_local_mode() -> bool:
+    """Vérifie si le mode local est activé."""
+    return load_config().is_local_mode()
+
+
+def get_local_models_config() -> LocalModelsConfig:
+    """Retourne la configuration des modèles locaux."""
+    return load_config().get_local_models_config()
+
+
+def get_local_embedding_path() -> str:
+    """Retourne le chemin du modèle d'embeddings local."""
+    return load_config().local_embedding_path
+
+
+def get_local_llm_path() -> str:
+    """Retourne le chemin du LLM local."""
+    return load_config().local_llm_path
+
+
+def get_local_reranker_path() -> str:
+    """Retourne le chemin du reranker local."""
+    return load_config().local_reranker_path
+
+
+def switch_to_local_mode() -> StorageConfig:
+    """
+    Bascule vers le mode local avec les valeurs par défaut.
+    Sauvegarde la configuration et retourne la nouvelle config.
+    """
+    config = StorageConfig.create_local_config()
+    save_config(config)
+    return config
+
+
+def switch_to_api_mode() -> StorageConfig:
+    """
+    Bascule vers le mode API avec les valeurs par défaut.
+    Sauvegarde la configuration et retourne la nouvelle config.
+    """
+    config = StorageConfig.from_dict(DEFAULT_CONFIG)
+    config.model_mode = "api"
+    save_config(config)
+    return config
+
+
+def render_local_models_config_streamlit():
+    """
+    Affiche la section de configuration des modèles locaux dans Streamlit.
+    """
+    import streamlit as st
+
+    config = load_config()
+
+    st.markdown("---")
+    st.subheader("Configuration des modèles locaux")
+
+    # Mode de fonctionnement
+    mode_options = ["API (distant)", "Local (GPU)"]
+    current_mode_idx = 1 if config.is_local_mode() else 0
+
+    new_mode = st.radio(
+        "Mode de fonctionnement",
+        options=mode_options,
+        index=current_mode_idx,
+        horizontal=True,
+        help="API: utilise les serveurs distants. Local: utilise les modèles sur votre machine avec GPU/CUDA."
+    )
+
+    is_local = (new_mode == "Local (GPU)")
+
+    if is_local:
+        st.info("Mode local activé - Les modèles seront chargés sur votre GPU/CPU")
+
+        # Afficher le statut CUDA si disponible
+        try:
+            from local_models import get_cuda_status
+            cuda_status = get_cuda_status()
+
+            if cuda_status["available"]:
+                st.success(f"GPU détecté: {cuda_status['gpu_name']}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("VRAM totale", f"{cuda_status['total_vram_gb']:.1f} GB")
+                with col2:
+                    st.metric("VRAM libre", f"{cuda_status['free_vram_gb']:.1f} GB")
+            else:
+                st.warning("Aucun GPU CUDA détecté - Les modèles utiliseront le CPU (plus lent)")
+        except ImportError:
+            st.warning("Module local_models non disponible")
+
+        st.markdown("#### Chemins des modèles")
+
+        new_embedding_path = st.text_input(
+            "Modèle d'embeddings (BGE-M3)",
+            value=config.local_embedding_path or DEFAULT_LOCAL_CONFIG["local_embedding_path"],
+            help="Chemin vers le modèle BGE-M3 pour les embeddings"
+        )
+
+        new_llm_path = st.text_input(
+            "LLM (Mistral-7B-Instruct)",
+            value=config.local_llm_path or DEFAULT_LOCAL_CONFIG["local_llm_path"],
+            help="Chemin vers le modèle Mistral pour la génération de réponses"
+        )
+
+        new_reranker_path = st.text_input(
+            "Reranker (BGE-Reranker-v2-M3)",
+            value=config.local_reranker_path or DEFAULT_LOCAL_CONFIG["local_reranker_path"],
+            help="Chemin vers le modèle BGE-Reranker pour le re-ranking"
+        )
+
+        # Valider les chemins
+        st.markdown("#### Statut des modèles")
+        models_valid = True
+
+        for name, path in [
+            ("Embeddings", new_embedding_path),
+            ("LLM", new_llm_path),
+            ("Reranker", new_reranker_path)
+        ]:
+            if path:
+                if os.path.exists(path):
+                    st.success(f"✅ {name}: `{path}`")
+                else:
+                    st.error(f"❌ {name}: Chemin non trouvé - `{path}`")
+                    models_valid = False
+            else:
+                st.warning(f"⚠️ {name}: Non configuré")
+
+        return {
+            "is_local": True,
+            "embedding_path": new_embedding_path,
+            "llm_path": new_llm_path,
+            "reranker_path": new_reranker_path,
+            "valid": models_valid
+        }
+
+    else:
+        st.info("Mode API activé - Utilisation des serveurs Snowflake et DALLEM")
+        return {
+            "is_local": False,
+            "embedding_path": "",
+            "llm_path": "",
+            "reranker_path": "",
+            "valid": True
+        }
+
+
+def initialize_local_models_if_needed():
+    """
+    Initialise les modèles locaux si le mode local est activé.
+    À appeler au démarrage de l'application.
+    """
+    config = load_config()
+
+    if not config.is_local_mode():
+        return
+
+    try:
+        from local_models import configure_local_models
+
+        configure_local_models(
+            embedding_path=config.local_embedding_path,
+            llm_path=config.local_llm_path,
+            reranker_path=config.local_reranker_path
+        )
+
+        print(f"[CONFIG] Modèles locaux configurés:")
+        print(f"  - Embeddings: {config.local_embedding_path}")
+        print(f"  - LLM: {config.local_llm_path}")
+        print(f"  - Reranker: {config.local_reranker_path}")
+
+    except ImportError as e:
+        print(f"[CONFIG] Impossible de charger le module local_models: {e}")
+    except Exception as e:
+        print(f"[CONFIG] Erreur lors de l'initialisation des modèles locaux: {e}")

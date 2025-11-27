@@ -1,6 +1,12 @@
 """
 Advanced Search Module - Query Expansion & Multi-Query
 Améliore la recherche RAG sans dépendances supplémentaires
+
+Supporte:
+- Query expansion via LLM (local ou API)
+- Multi-query search avec fusion des résultats
+- Reranking BGE (local ou API)
+- Filtrage par mots-clés
 """
 
 import logging
@@ -8,6 +14,22 @@ from typing import List, Dict, Any, Optional, Tuple
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
+
+# Import conditionnel pour les modèles locaux
+try:
+    from local_models import local_models_manager, LocalReranker
+    LOCAL_RERANKER_AVAILABLE = True
+except ImportError:
+    LOCAL_RERANKER_AVAILABLE = False
+
+# Import de la configuration
+try:
+    from config_manager import load_config, is_local_mode
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    def is_local_mode():
+        return False
 
 
 def expand_query_with_llm(
@@ -297,7 +319,54 @@ BGE_RERANKER_ENDPOINT = "rerank"
 BGE_RERANKER_API_KEY = "EMPTY"  # Peut être configuré si nécessaire
 
 
-def rerank_with_bge(
+def rerank_with_bge_local(
+    query: str,
+    documents: List[str],
+    top_k: int = None,
+    log=None
+) -> List[Dict[str, Any]]:
+    """
+    Rerank les documents en utilisant le modèle BGE Reranker LOCAL.
+
+    Args:
+        query: La question/requête
+        documents: Liste des documents à reranker
+        top_k: Nombre de documents à retourner (None = tous)
+        log: Logger optionnel
+
+    Returns:
+        Liste de dicts avec index, document, et score de pertinence
+    """
+    _log = log or logger
+
+    if not documents:
+        return []
+
+    if not LOCAL_RERANKER_AVAILABLE:
+        _log.warning("[RERANK-LOCAL] Module local_models non disponible")
+        return [{"index": i, "score": 1.0 - (i * 0.01), "document": documents[i]} for i in range(len(documents))]
+
+    _log.info(f"[RERANK-LOCAL] Reranking {len(documents)} documents avec BGE Reranker local...")
+
+    try:
+        reranker = local_models_manager.get_reranker()
+
+        if reranker is None:
+            _log.warning("[RERANK-LOCAL] Reranker local non configuré, fallback ordre original")
+            return [{"index": i, "score": 1.0 - (i * 0.01), "document": documents[i]} for i in range(len(documents))]
+
+        results = reranker.rerank(query, documents, top_k)
+
+        _log.info(f"[RERANK-LOCAL] ✅ Reranking terminé. Top score: {results[0]['score']:.3f}" if results else "[RERANK-LOCAL] ✅ Reranking terminé")
+
+        return results
+
+    except Exception as e:
+        _log.error(f"[RERANK-LOCAL] ❌ Erreur: {e}")
+        return [{"index": i, "score": 1.0 - (i * 0.01), "document": documents[i]} for i in range(len(documents))]
+
+
+def rerank_with_bge_api(
     query: str,
     documents: List[str],
     top_k: int = None,
@@ -305,7 +374,7 @@ def rerank_with_bge(
     log=None
 ) -> List[Dict[str, Any]]:
     """
-    Rerank les documents en utilisant le modèle BGE Reranker (local ou API).
+    Rerank les documents en utilisant le modèle BGE Reranker via API.
 
     Args:
         query: La question/requête
@@ -322,7 +391,7 @@ def rerank_with_bge(
     if not documents:
         return []
 
-    _log.info(f"[RERANK] Reranking {len(documents)} documents avec BGE Reranker API...")
+    _log.info(f"[RERANK-API] Reranking {len(documents)} documents avec BGE Reranker API...")
 
     url = f"{BGE_RERANKER_API_BASE}{BGE_RERANKER_ENDPOINT}"
     headers = {
@@ -350,7 +419,7 @@ def rerank_with_bge(
         results = response_data.get("results", [])
 
         if not results:
-            _log.warning("[RERANK] Pas de résultats du reranker, utilisation de l'ordre original")
+            _log.warning("[RERANK-API] Pas de résultats du reranker, utilisation de l'ordre original")
             return [{"index": i, "score": 1.0 - (i * 0.01)} for i in range(len(documents))]
 
         # Trier par score décroissant
@@ -370,14 +439,60 @@ def rerank_with_bge(
         if top_k:
             reranked = reranked[:top_k]
 
-        _log.info(f"[RERANK] ✅ Reranking API terminé. Top score: {reranked[0]['score']:.3f}" if reranked else "[RERANK] ✅ Reranking terminé")
+        _log.info(f"[RERANK-API] ✅ Reranking terminé. Top score: {reranked[0]['score']:.3f}" if reranked else "[RERANK-API] ✅ Reranking terminé")
 
         return reranked
 
     except Exception as e:
-        _log.error(f"[RERANK] ❌ Erreur lors du reranking: {e}")
+        _log.error(f"[RERANK-API] ❌ Erreur lors du reranking: {e}")
         # Fallback: retourner l'ordre original
         return [{"index": i, "score": 1.0 - (i * 0.01), "document": documents[i]} for i in range(len(documents))]
+
+
+def rerank_with_bge(
+    query: str,
+    documents: List[str],
+    top_k: int = None,
+    http_client=None,
+    log=None,
+    use_local: Optional[bool] = None
+) -> List[Dict[str, Any]]:
+    """
+    Rerank les documents en utilisant le modèle BGE Reranker (local ou API).
+
+    Args:
+        query: La question/requête
+        documents: Liste des documents à reranker
+        top_k: Nombre de documents à retourner (None = tous)
+        http_client: Client HTTP (optionnel, sinon utilise requests)
+        log: Logger optionnel
+        use_local: Force le mode local (True) ou API (False). Si None, utilise la config.
+
+    Returns:
+        Liste de dicts avec index, document, et score de pertinence
+    """
+    _log = log or logger
+
+    if not documents:
+        return []
+
+    # Déterminer le mode
+    if use_local is None:
+        use_local = is_local_mode() if CONFIG_AVAILABLE else False
+
+    if use_local and LOCAL_RERANKER_AVAILABLE:
+        _log.info("[RERANK] Mode local activé")
+        results = rerank_with_bge_local(query, documents, top_k, _log)
+
+        # Si le local échoue, fallback vers API
+        if not results or all(r.get("score", 0) == 0 for r in results):
+            _log.warning("[RERANK] Fallback vers API...")
+            return rerank_with_bge_api(query, documents, top_k, http_client, _log)
+
+        return results
+
+    # Mode API
+    return rerank_with_bge_api(query, documents, top_k, http_client, _log)
 
 
 def apply_reranking_to_sources(

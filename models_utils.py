@@ -1,10 +1,17 @@
 # models_utils.py
+"""
+Utilitaires pour les modèles d'embeddings et LLM.
+
+Supporte deux modes:
+- API: Utilise les APIs distantes (Snowflake, DALLEM)
+- Local: Utilise les modèles locaux avec CUDA (BGE-M3, Mistral, BGE-Reranker)
+"""
 import os
 import sys
 import math
 import time
 import traceback
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import multiprocessing
 
@@ -15,6 +22,31 @@ from logging import Logger
 
 from openai import OpenAI
 import openai
+
+# Import conditionnel pour les modèles locaux
+try:
+    from local_models import (
+        LocalEmbeddings,
+        LocalLLM,
+        LocalReranker,
+        local_models_manager,
+        cuda_manager,
+        get_cuda_status,
+    )
+    LOCAL_MODELS_AVAILABLE = True
+except ImportError:
+    LOCAL_MODELS_AVAILABLE = False
+
+# Import de la configuration
+try:
+    from config_manager import load_config, is_local_mode
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    def load_config():
+        return None
+    def is_local_mode():
+        return False
 
 
 # ---------------------------------------------------------------------
@@ -416,6 +448,56 @@ def embed_in_batches(
 # ---------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------
+#  Client LLM Local (wrapper)
+# ---------------------------------------------------------------------
+
+class LocalLLMWrapper:
+    """
+    Wrapper pour le LLM local qui expose une interface similaire à l'API.
+    """
+
+    def __init__(self, logger: Optional[Logger] = None):
+        self.log = logger or logging.getLogger("rag_da")
+        self._llm = None
+
+    def _get_llm(self) -> Optional["LocalLLM"]:
+        """Récupère ou charge le LLM local."""
+        if self._llm is None and LOCAL_MODELS_AVAILABLE:
+            self._llm = local_models_manager.get_llm()
+        return self._llm
+
+    def chat_completion(
+        self,
+        question: str,
+        context: str,
+    ) -> str:
+        """
+        Génère une réponse via le LLM local.
+
+        Args:
+            question: Question de l'utilisateur
+            context: Contexte documentaire
+
+        Returns:
+            Réponse générée
+        """
+        llm = self._get_llm()
+        if llm is None:
+            raise RuntimeError("LLM local non disponible ou non configuré")
+
+        self.log.info("[LLM-LOCAL] Génération de réponse...")
+
+        try:
+            response = llm.chat_completion(question, context)
+            self.log.info(f"[LLM-LOCAL] Réponse générée ({len(response)} chars)")
+            return response
+
+        except Exception as e:
+            self.log.error(f"[LLM-LOCAL] Erreur: {e}")
+            raise
+
+
 def call_dallem_chat(
     http_client: httpx.Client,
     question: str,
@@ -511,3 +593,278 @@ def call_dallem_chat(
         "👉 **Veuillez reposer votre question** ou réessayer dans quelques instants."
     )
     return error_msg
+
+
+# ---------------------------------------------------------------------
+#  FONCTIONS UNIFIÉES (LOCAL OU API)
+# ---------------------------------------------------------------------
+
+def call_llm_chat(
+    http_client: Optional[httpx.Client],
+    question: str,
+    context: str,
+    log: Logger,
+    use_local: Optional[bool] = None,
+) -> str:
+    """
+    Appel unifié au LLM (local ou API selon la configuration).
+
+    Args:
+        http_client: Client HTTP pour l'API (peut être None si local)
+        question: Question de l'utilisateur
+        context: Contexte documentaire
+        log: Logger
+        use_local: Force le mode local (True) ou API (False). Si None, utilise la config.
+
+    Returns:
+        Réponse générée
+    """
+    # Déterminer le mode
+    if use_local is None:
+        use_local = is_local_mode() if CONFIG_AVAILABLE else False
+
+    if use_local and LOCAL_MODELS_AVAILABLE:
+        log.info("[LLM] Mode local activé")
+        try:
+            llm_wrapper = LocalLLMWrapper(logger=log)
+            return llm_wrapper.chat_completion(question, context)
+        except Exception as e:
+            log.error(f"[LLM] Erreur mode local: {e}")
+            # Fallback vers API si possible
+            if http_client is not None:
+                log.warning("[LLM] Fallback vers API...")
+                return call_dallem_chat(http_client, question, context, log)
+            raise
+
+    # Mode API
+    if http_client is None:
+        http_client = create_http_client()
+
+    return call_dallem_chat(http_client, question, context, log)
+
+
+class UnifiedEmbeddings:
+    """
+    Client d'embeddings unifié qui utilise soit l'API soit les modèles locaux.
+    """
+
+    def __init__(
+        self,
+        logger: Optional[Logger] = None,
+        use_local: Optional[bool] = None,
+    ):
+        """
+        Args:
+            logger: Logger optionnel
+            use_local: Force le mode local (True) ou API (False). Si None, utilise la config.
+        """
+        self.log = logger or logging.getLogger("rag_da")
+
+        # Déterminer le mode
+        if use_local is None:
+            self.use_local = is_local_mode() if CONFIG_AVAILABLE else False
+        else:
+            self.use_local = use_local
+
+        self._local_embeddings = None
+        self._api_embeddings = None
+
+        if self.use_local and LOCAL_MODELS_AVAILABLE:
+            self.log.info("[EMB] Mode local activé")
+            self._init_local()
+        else:
+            self.log.info("[EMB] Mode API activé")
+            self._init_api()
+
+    def _init_local(self):
+        """Initialise le client d'embeddings local."""
+        try:
+            self._local_embeddings = local_models_manager.get_embeddings()
+            if self._local_embeddings is None:
+                self.log.warning("[EMB] Modèle local non disponible, fallback API")
+                self.use_local = False
+                self._init_api()
+        except Exception as e:
+            self.log.error(f"[EMB] Erreur init local: {e}")
+            self.use_local = False
+            self._init_api()
+
+    def _init_api(self):
+        """Initialise le client d'embeddings API."""
+        http_client = create_http_client()
+        self._api_embeddings = DirectOpenAIEmbeddings(
+            model=EMBED_MODEL,
+            api_key=SNOWFLAKE_API_KEY,
+            base_url=SNOWFLAKE_API_BASE,
+            http_client=http_client,
+            role_prefix=True,
+            logger=self.log,
+        )
+
+    @property
+    def dimension(self) -> int:
+        """Retourne la dimension des embeddings."""
+        if self.use_local and self._local_embeddings:
+            return self._local_embeddings.dimension
+        return 1024  # Dimension par défaut pour Snowflake
+
+    def embed_documents(self, texts: List[str]) -> np.ndarray:
+        """
+        Génère les embeddings pour des documents.
+
+        Args:
+            texts: Liste des textes
+
+        Returns:
+            Array numpy (n_texts, dimension)
+        """
+        if not texts:
+            return np.array([])
+
+        if self.use_local and self._local_embeddings:
+            return self._local_embeddings.embed_documents(texts)
+
+        # Mode API
+        return np.array(self._api_embeddings.embed_documents(texts))
+
+    def embed_queries(self, texts: List[str]) -> np.ndarray:
+        """
+        Génère les embeddings pour des requêtes.
+
+        Args:
+            texts: Liste des requêtes
+
+        Returns:
+            Array numpy (n_texts, dimension)
+        """
+        if not texts:
+            return np.array([])
+
+        if self.use_local and self._local_embeddings:
+            return self._local_embeddings.embed_queries(texts)
+
+        # Mode API
+        return np.array(self._api_embeddings.embed_queries(texts))
+
+
+def create_unified_embeddings(
+    logger: Optional[Logger] = None,
+    use_local: Optional[bool] = None,
+) -> UnifiedEmbeddings:
+    """
+    Crée un client d'embeddings unifié.
+
+    Args:
+        logger: Logger optionnel
+        use_local: Force le mode local (True) ou API (False). Si None, utilise la config.
+
+    Returns:
+        UnifiedEmbeddings
+    """
+    return UnifiedEmbeddings(logger=logger, use_local=use_local)
+
+
+def embed_texts_unified(
+    texts: List[str],
+    role: str,
+    batch_size: int,
+    log: Logger,
+    use_local: Optional[bool] = None,
+    dry_run: bool = False,
+) -> np.ndarray:
+    """
+    Génère les embeddings de manière unifiée (local ou API).
+
+    Args:
+        texts: Textes à encoder
+        role: "query" ou "passage"
+        batch_size: Taille des batches (utilisé uniquement en mode API)
+        log: Logger
+        use_local: Force le mode local (True) ou API (False). Si None, utilise la config.
+        dry_run: Si True, génère des embeddings aléatoires
+
+    Returns:
+        Array numpy normalisé (n_texts, dimension)
+    """
+    if dry_run:
+        dim = 1024
+        fake = np.random.rand(len(texts), dim).astype(np.float32) - 0.5
+        # Normalisation L2
+        denom = np.linalg.norm(fake, axis=1, keepdims=True) + 1e-12
+        return fake / denom
+
+    # Déterminer le mode
+    if use_local is None:
+        use_local = is_local_mode() if CONFIG_AVAILABLE else False
+
+    if use_local and LOCAL_MODELS_AVAILABLE:
+        log.info(f"[EMB] Mode local, role={role}, n={len(texts)}")
+        embeddings_client = local_models_manager.get_embeddings()
+
+        if embeddings_client is None:
+            log.warning("[EMB] Modèle local non disponible, fallback API")
+            use_local = False
+        else:
+            if role == "query":
+                result = embeddings_client.embed_queries(texts)
+            else:
+                result = embeddings_client.embed_documents(texts)
+
+            return result
+
+    # Mode API - utiliser la fonction existante
+    http_client = create_http_client()
+    emb_client = DirectOpenAIEmbeddings(
+        model=EMBED_MODEL,
+        api_key=SNOWFLAKE_API_KEY,
+        base_url=SNOWFLAKE_API_BASE,
+        http_client=http_client,
+        role_prefix=True,
+        logger=log,
+    )
+
+    return embed_in_batches(
+        texts=texts,
+        role=role,
+        batch_size=batch_size,
+        emb_client=emb_client,
+        log=log,
+        dry_run=False,
+        use_parallel=True,
+    )
+
+
+# ---------------------------------------------------------------------
+#  INFORMATIONS SUR LE MODE ACTUEL
+# ---------------------------------------------------------------------
+
+def get_models_mode_info() -> dict:
+    """
+    Retourne des informations sur le mode actuel (local ou API).
+
+    Returns:
+        Dict avec les informations sur le mode et les modèles
+    """
+    info = {
+        "mode": "local" if (CONFIG_AVAILABLE and is_local_mode()) else "api",
+        "local_available": LOCAL_MODELS_AVAILABLE,
+        "config_available": CONFIG_AVAILABLE,
+    }
+
+    if LOCAL_MODELS_AVAILABLE:
+        try:
+            cuda_info = get_cuda_status()
+            info["cuda"] = cuda_info
+        except Exception:
+            info["cuda"] = {"available": False}
+
+        if CONFIG_AVAILABLE:
+            config = load_config()
+            if config:
+                info["local_paths"] = {
+                    "embedding": config.local_embedding_path,
+                    "llm": config.local_llm_path,
+                    "reranker": config.local_reranker_path,
+                }
+
+    return info

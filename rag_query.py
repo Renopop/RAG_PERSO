@@ -1,4 +1,11 @@
 # rag_query.py
+"""
+Module de requêtes RAG.
+
+Supporte deux modes:
+- API: Utilise les APIs distantes (Snowflake, DALLEM)
+- Local: Utilise les modèles locaux avec CUDA (BGE-M3, Mistral, BGE-Reranker)
+"""
 
 import os
 import time
@@ -16,7 +23,20 @@ from models_utils import (
     DirectOpenAIEmbeddings,
     embed_in_batches,
     call_dallem_chat,
+    # Fonctions unifiées (local ou API)
+    call_llm_chat,
+    embed_texts_unified,
+    get_models_mode_info,
 )
+
+# Import de la configuration pour le mode local
+try:
+    from config_manager import load_config, is_local_mode
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    def is_local_mode():
+        return False
 
 # Import optionnel du FeedbackStore pour le re-ranking
 try:
@@ -93,6 +113,7 @@ def _run_rag_query_single_collection(
     num_query_variations: int = 3,
     use_bge_reranker: bool = True,
     use_context_expansion: bool = True,
+    use_local_models: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     RAG sur une seule collection.
@@ -104,6 +125,8 @@ def _run_rag_query_single_collection(
     - Si use_query_expansion=True : génère des variations de la question et fusionne les résultats
     - Si use_bge_reranker=True : applique le reranking BGE après la recherche initiale
     - Si use_context_expansion=True : enrichit les chunks avec contexte voisin et références
+    - Si use_local_models=True : utilise les modèles locaux (BGE-M3, Mistral, BGE-Reranker)
+      Si None, utilise la configuration globale
     """
     _log = log or logger
 
@@ -111,24 +134,34 @@ def _run_rag_query_single_collection(
     if not question:
         raise ValueError("Question vide")
 
+    # Déterminer si on utilise les modèles locaux
+    if use_local_models is None:
+        use_local_models = is_local_mode() if CONFIG_AVAILABLE else False
+
+    mode_str = "LOCAL" if use_local_models else "API"
     _log.info(
-        f"[RAG] (single) db={db_path} | collection={collection_name} | top_k={top_k}"
+        f"[RAG] (single) db={db_path} | collection={collection_name} | top_k={top_k} | mode={mode_str}"
     )
 
     # 1) FAISS store + collection
     store = build_store(db_path)
     collection = store.get_collection(name=collection_name)
 
-    # 2) Client embeddings Snowflake
+    # 2) Client embeddings (unifié: local ou API)
     http_client = create_http_client()
-    emb_client = DirectOpenAIEmbeddings(
-        model=EMBED_MODEL,
-        api_key=SNOWFLAKE_API_KEY,
-        base_url=SNOWFLAKE_API_BASE,
-        http_client=http_client,
-        role_prefix=True,
-        logger=_log,
-    )
+
+    # Pour le mode API, on garde l'ancien client pour la compatibilité
+    if not use_local_models:
+        emb_client = DirectOpenAIEmbeddings(
+            model=EMBED_MODEL,
+            api_key=SNOWFLAKE_API_KEY,
+            base_url=SNOWFLAKE_API_BASE,
+            http_client=http_client,
+            role_prefix=True,
+            logger=_log,
+        )
+    else:
+        emb_client = None  # On utilisera embed_texts_unified directement
 
     # 3) Recherche avec ou sans Query Expansion
     if use_query_expansion and ADVANCED_SEARCH_AVAILABLE:
@@ -145,16 +178,25 @@ def _run_rag_query_single_collection(
             log=_log,
         )
 
-        # Fonction d'embedding pour multi-query
+        # Fonction d'embedding pour multi-query (unifié: local ou API)
         def embed_query(q: str):
-            return embed_in_batches(
-                texts=[q],
-                role="query",
-                batch_size=1,
-                emb_client=emb_client,
-                log=_log,
-                dry_run=False,
-            )[0]
+            if use_local_models:
+                return embed_texts_unified(
+                    texts=[q],
+                    role="query",
+                    batch_size=1,
+                    log=_log,
+                    use_local=True,
+                )[0]
+            else:
+                return embed_in_batches(
+                    texts=[q],
+                    role="query",
+                    batch_size=1,
+                    emb_client=emb_client,
+                    log=_log,
+                    dry_run=False,
+                )[0]
 
         # Recherche multi-query
         raw = run_multi_query_search(
@@ -167,15 +209,24 @@ def _run_rag_query_single_collection(
         _log.info(f"[RAG] ✅ Multi-query search completed ({len(queries)} queries)")
 
     else:
-        # Mode standard: une seule requête
-        q_emb = embed_in_batches(
-            texts=[question],
-            role="query",
-            batch_size=1,
-            emb_client=emb_client,
-            log=_log,
-            dry_run=False,
-        )[0]
+        # Mode standard: une seule requête (unifié: local ou API)
+        if use_local_models:
+            q_emb = embed_texts_unified(
+                texts=[question],
+                role="query",
+                batch_size=1,
+                log=_log,
+                use_local=True,
+            )[0]
+        else:
+            q_emb = embed_in_batches(
+                texts=[question],
+                role="query",
+                batch_size=1,
+                emb_client=emb_client,
+                log=_log,
+                dry_run=False,
+            )[0]
 
         _log.info("[RAG] Querying FAISS index...")
         raw = collection.query(
@@ -404,12 +455,13 @@ def _run_rag_query_single_collection(
             "sources": sources,
         }
 
-    # 6) Appel LLM DALLEM
-    answer = call_dallem_chat(
+    # 6) Appel LLM (unifié: local ou API)
+    answer = call_llm_chat(
         http_client=http_client,
         question=question,
         context=full_context,
         log=_log,
+        use_local=use_local_models,
     )
 
     return {
@@ -438,6 +490,7 @@ def run_rag_query(
     num_query_variations: int = 3,
     use_bge_reranker: bool = True,
     use_context_expansion: bool = True,
+    use_local_models: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     RAG "haut niveau" :
@@ -465,6 +518,10 @@ def run_rag_query(
     - feedback_store : instance de FeedbackStore pour accéder aux feedbacks
     - use_feedback_reranking : activer le re-ranking basé sur les feedbacks
     - feedback_alpha : facteur d'influence (0-1, défaut 0.3)
+
+    Options de mode local :
+    - use_local_models : si True, utilise les modèles locaux (BGE-M3, Mistral, BGE-Reranker)
+                         si None, utilise la configuration globale
     """
     _log = log or logger
 
@@ -514,6 +571,7 @@ def run_rag_query(
                     num_query_variations=num_query_variations,
                     use_bge_reranker=use_bge_reranker,
                     use_context_expansion=use_context_expansion,
+                    use_local_models=use_local_models,
                 )
             except Exception as e:
                 _log.error(
@@ -547,11 +605,12 @@ def run_rag_query(
             }
 
         http_client = create_http_client()
-        answer = call_dallem_chat(
+        answer = call_llm_chat(
             http_client=http_client,
             question=(question or "").strip(),
             context=global_context,
             log=_log,
+            use_local=use_local_models,
         )
 
         return {
@@ -576,4 +635,5 @@ def run_rag_query(
         num_query_variations=num_query_variations,
         use_bge_reranker=use_bge_reranker,
         use_context_expansion=use_context_expansion,
+        use_local_models=use_local_models,
     )
