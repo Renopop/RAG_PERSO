@@ -74,11 +74,19 @@ N:\Mon_Dossier\BaseDB\
 - Espace disque suffisant pour les bases FAISS
 - Chemins sans espaces (voir ci-dessus)
 
-**Sur chaque poste client :**
+**Sur chaque poste client (Mode API) :**
 - Windows 10/11
 - Python 3.8 ou supérieur (3.11 recommandé)
 - Accès au partage réseau
 - 4 GB RAM minimum (8 GB recommandé)
+
+**Sur chaque poste client (Mode Local GPU) :**
+- Windows 10/11
+- Python 3.8 ou supérieur (3.11 recommandé)
+- **GPU NVIDIA** avec CUDA 11.8+
+- **6 GB VRAM minimum** (8 GB+ recommandé)
+- 16 GB RAM recommandé
+- Modèles téléchargés localement (~15-20 GB)
 
 ---
 
@@ -117,6 +125,98 @@ N:\Mon_Dossier\BaseDB\
 **Pour arrêter l'application :**
 - Fermez la fenêtre de commande
 - Ou appuyez sur `Ctrl+C`
+
+---
+
+## 🖥️ Installation Mode Local (GPU)
+
+Pour utiliser les modèles locaux avec GPU, des étapes supplémentaires sont nécessaires.
+
+### Étape 1 : Vérifier CUDA
+
+```cmd
+nvidia-smi
+```
+
+Vous devez voir votre GPU NVIDIA avec la version CUDA. Si ce n'est pas le cas, installez les drivers NVIDIA.
+
+### Étape 2 : Installer PyTorch avec CUDA
+
+```bash
+# Pour CUDA 11.8
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Pour CUDA 12.1
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+### Étape 3 : Installer les dépendances ML
+
+```bash
+pip install transformers>=4.36.0
+pip install accelerate>=0.25.0
+pip install bitsandbytes>=0.41.0
+pip install sentence-transformers>=2.2.0
+```
+
+### Étape 4 : Télécharger les modèles
+
+Téléchargez les modèles depuis Hugging Face et placez-les dans les chemins configurés :
+
+| Modèle | URL | Chemin par défaut |
+|--------|-----|-------------------|
+| **BGE-M3** | https://huggingface.co/BAAI/bge-m3 | `D:\IA_Test\models\BAAI\bge-m3` |
+| **Mistral 7B** | https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3 | `D:\IA_Test\models\mistralai\Mistral-7B-Instruct-v0.3` |
+| **Qwen 2.5 3B** | https://huggingface.co/Qwen/Qwen2.5-3B-Instruct | `D:\IA_Test\models\Qwen\Qwen2.5-3B-Instruct` |
+| **BGE-Reranker** | https://huggingface.co/BAAI/bge-reranker-v2-m3 | `D:\IA_Test\models\BAAI\bge-reranker-v2-m3` |
+
+**Commande pour télécharger via git-lfs :**
+
+```bash
+# Installer git-lfs si nécessaire
+git lfs install
+
+# Cloner un modèle (exemple BGE-M3)
+git clone https://huggingface.co/BAAI/bge-m3 D:\IA_Test\models\BAAI\bge-m3
+```
+
+### Étape 5 : Configurer les chemins locaux
+
+Dans l'application Streamlit, allez dans la **barre latérale** et :
+1. Cochez **"🖥️ Utiliser les modèles locaux"**
+2. Configurez les chemins des modèles
+3. Sélectionnez le LLM souhaité (Mistral ou Qwen)
+
+### Structure des modèles locaux
+
+```
+D:\IA_Test\models\
+├── BAAI\
+│   ├── bge-m3\                    # ~2 GB
+│   │   ├── config.json
+│   │   ├── model.safetensors
+│   │   └── ...
+│   └── bge-reranker-v2-m3\        # ~1 GB
+│       └── ...
+├── mistralai\
+│   └── Mistral-7B-Instruct-v0.3\  # ~14 GB
+│       └── ...
+└── Qwen\
+    └── Qwen2.5-3B-Instruct\       # ~6 GB
+        └── ...
+```
+
+### Répertoires FAISS locaux
+
+En mode local, les bases FAISS peuvent être stockées localement :
+
+```
+D:\FAISS_DATABASE\
+├── BaseDB\                        # Bases FAISS
+├── CSV_Ingestion\                 # CSV d'ingestion
+├── Fichiers_Tracking_CSV\         # Tracking
+└── Feedbacks\                     # Feedbacks utilisateurs
+```
 
 ---
 
@@ -388,25 +488,31 @@ Si `requirements.txt` a changé :
    \\SERVEUR\RAG\launch.bat
    → Navigateur s'ouvre automatiquement
 
-3. CRÉER UN CSV
+3. CHOISIR LE MODE
+   Barre latérale → "🖥️ Utiliser les modèles locaux"
+   → Mode API (cloud) ou Mode Local (GPU)
+   → Si local : sélectionner le LLM (Mistral ou Qwen)
+
+4. CRÉER UN CSV
    Onglet "Gestion CSV" → Création d'un CSV
    → Scanner un répertoire → Assigner groupes → Sauvegarder
 
-4. INGÉRER DES DOCUMENTS
+5. INGÉRER DES DOCUMENTS
    Onglet "Ingestion documents"
    → Uploader le CSV → Lancer ingestion
    → Extraction automatique pièces jointes PDF
 
-5. POSER DES QUESTIONS
+6. POSER DES QUESTIONS
    Onglet "Questions RAG"
    → Sélectionner base + collection → Taper question
    → Sources cliquables avec bouton "Ouvrir"
 
-NOUVEAUTÉS v1.4 :
+NOUVEAUTÉS v1.5 :
+✅ Mode Local GPU (Mistral 7B, Qwen 2.5 3B)
+✅ Gestion CUDA/VRAM intelligente
+✅ Menu déroulant sélection LLM
 ✅ FAISS = compatible réseau Windows
 ✅ Extraction tableaux PDF (pdfplumber)
-✅ Cache Streamlit (requêtes répétées instantanées)
-✅ APIs uniquement (Snowflake, DALLEM, BGE Reranker)
 
 Aide : GUIDE_UTILISATEUR.md
 ```
@@ -460,7 +566,7 @@ Pour toute question ou problème :
 
 ## ✅ Checklist déploiement
 
-Avant de déployer en production :
+### Mode API (minimal)
 
 - [ ] Python 3.8+ installé sur tous les postes
 - [ ] Chemins réseau configurés **sans espaces**
@@ -472,6 +578,19 @@ Avant de déployer en production :
 - [ ] Requêtes test réussies
 - [ ] Extraction pièces jointes testée
 - [ ] Documentation distribuée (GUIDE_UTILISATEUR.md)
+
+### Mode Local GPU (supplémentaire)
+
+- [ ] GPU NVIDIA avec 6+ GB VRAM
+- [ ] CUDA 11.8+ installé (`nvidia-smi` fonctionne)
+- [ ] PyTorch avec CUDA installé
+- [ ] Dépendances ML installées (transformers, bitsandbytes, etc.)
+- [ ] Modèles téléchargés :
+  - [ ] BGE-M3 (~2 GB)
+  - [ ] Mistral 7B ou Qwen 2.5 3B (~6-14 GB)
+  - [ ] BGE-Reranker (~1 GB)
+- [ ] Chemins modèles configurés dans l'application
+- [ ] Test mode local réussi (embedding + génération)
 
 ---
 

@@ -1,6 +1,6 @@
 # 🚀 RaGME_UP - PROP
 
-Système RAG (Retrieval-Augmented Generation) pour l'indexation et l'interrogation de documents techniques avec FAISS, Snowflake Arctic Embeddings et DALLEM. Inclut un système de feedback utilisateur avec re-ranking intelligent.
+Système RAG (Retrieval-Augmented Generation) pour l'indexation et l'interrogation de documents techniques avec FAISS. Supporte deux modes : **API distantes** (Snowflake Arctic, DALLEM, BGE Reranker) ou **modèles locaux** (BGE-M3, Mistral, Qwen, BGE-Reranker) avec gestion CUDA/VRAM intelligente. Inclut un système de feedback utilisateur avec re-ranking intelligent.
 
 ---
 
@@ -46,6 +46,41 @@ L'application s'ouvre automatiquement dans votre navigateur sur `http://localhos
 - 🔄 **Re-ranking intelligent** : amélioration des résultats basée sur les feedbacks
 - 📊 **Tableau de bord analytique** : statistiques et tendances des retours
 - 👥 **Authentification** utilisateurs pour l'accès aux paramètres
+
+---
+
+## 🖥️ Modes d'exécution : API vs Local
+
+Le système supporte deux modes d'exécution au choix :
+
+### Mode API (par défaut)
+| Composant | Service | Description |
+|-----------|---------|-------------|
+| **Embeddings** | Snowflake Arctic | API cloud, 1024 dimensions |
+| **LLM** | DALLEM | API cloud pour génération |
+| **Reranker** | BGE Reranker API | API cloud pour re-ranking |
+
+### Mode Local (GPU CUDA)
+| Composant | Modèle | Chemin par défaut |
+|-----------|--------|-------------------|
+| **Embeddings** | BGE-M3 | `D:\IA_Test\models\BAAI\bge-m3` |
+| **LLM** | Mistral 7B / Qwen 2.5 3B | Sélection via menu déroulant |
+| **Reranker** | BGE-Reranker-v2-M3 | `D:\IA_Test\models\BAAI\bge-reranker-v2-m3` |
+
+### Fonctionnalités du mode local
+
+- 🎮 **Gestion CUDA/VRAM** : Détection automatique du GPU et de la VRAM disponible
+- 📊 **Batch adaptatif** : Taille de batch ajustée automatiquement selon la VRAM
+- ⚠️ **Gestion OOM** : Fallback automatique (batch réduit → CPU) en cas de mémoire insuffisante
+- 🔄 **Multi-LLM** : Choix entre Mistral 7B et Qwen 2.5 3B via menu déroulant
+- ⚡ **Quantification 4-bit** : Chargement optimisé des LLM avec BitsAndBytes
+
+### LLM locaux disponibles
+
+| Modèle | Paramètres | VRAM requise | Type |
+|--------|------------|--------------|------|
+| **Mistral 7B Instruct v0.3** | 7B | ~6 GB | Bon équilibre performance/ressources |
+| **Qwen 2.5 3B Instruct** | 3B | ~3 GB | Léger et rapide |
 
 ---
 
@@ -418,9 +453,25 @@ adapted_chunk_size = _get_adaptive_chunk_size(
 
 ## 📋 Prérequis
 
+### Mode API (par défaut)
 - Python 3.8 ou supérieur
 - Windows 10/11 (ou Linux/macOS avec adaptations)
 - Accès réseau aux APIs : Snowflake (embeddings), DALLEM (LLM), BGE Reranker
+
+### Mode Local (GPU)
+- Python 3.8 ou supérieur
+- Windows 10/11 (ou Linux/macOS avec adaptations)
+- **GPU NVIDIA** avec CUDA 11.8+ et **6 GB VRAM minimum** (8 GB+ recommandé)
+- Dépendances supplémentaires :
+  ```bash
+  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+  pip install transformers accelerate bitsandbytes sentence-transformers
+  ```
+- Modèles téléchargés localement :
+  - BGE-M3 : `D:\IA_Test\models\BAAI\bge-m3`
+  - Mistral 7B : `D:\IA_Test\models\mistralai\Mistral-7B-Instruct-v0.3`
+  - Qwen 2.5 3B : `D:\IA_Test\models\Qwen\Qwen2.5-3B-Instruct`
+  - BGE-Reranker : `D:\IA_Test\models\BAAI\bge-reranker-v2-m3`
 
 ---
 
@@ -433,5 +484,12 @@ Consultez la documentation pour toute question :
 
 ---
 
-**Version:** 1.4
+**Version:** 1.5
 **Dernière mise à jour:** 2025-11-27
+
+### Nouveautés v1.5
+- 🖥️ **Mode Local** : Support complet des modèles locaux (BGE-M3, Mistral, Qwen, BGE-Reranker)
+- 🎮 **Gestion CUDA/VRAM** : Détection automatique GPU, batch adaptatif, gestion OOM
+- 🔄 **Multi-LLM** : Menu déroulant pour choisir entre Mistral 7B et Qwen 2.5 3B
+- ⚡ **Quantification 4-bit** : Chargement optimisé avec BitsAndBytes
+- 📁 **Stockage local** : Répertoires FAISS configurables pour mode local
