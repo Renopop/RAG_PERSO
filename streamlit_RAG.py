@@ -70,6 +70,14 @@ logger = make_logger(debug=False)
 
 
 # =====================================================================
+#  INITIALISATION DES MODÈLES LOCAUX AU DÉMARRAGE
+# =====================================================================
+# Si le mode local est déjà activé dans la config, on configure les modèles
+# AVANT toute opération pour éviter les erreurs de modèles non configurés.
+initialize_local_models_if_needed()
+
+
+# =====================================================================
 #  CACHE POUR LES RESSOURCES ET REQUÊTES RAG (amélioration performance)
 # =====================================================================
 
@@ -583,13 +591,21 @@ if current_user in allowed_users:
                 save_config(current_config)
                 st.success(f"✅ LLM sélectionné : {llm_info['name']}")
 
-                # Recharger le LLM si nécessaire
+                # Reconfigurer les modèles locaux avec le nouveau LLM
                 try:
-                    from local_models import local_models_manager
-                    if local_models_manager._llm is not None:
-                        local_models_manager.reload_llm(llm_info.get("model_type", "mistral"))
+                    from local_models import local_models_manager, cuda_manager
+                    # Décharger l'ancien LLM pour libérer la VRAM
+                    if local_models_manager.llm_model is not None:
+                        local_models_manager.llm_model = None
+                        cuda_manager.clear_cuda_cache()
+                    # Reconfigurer avec le nouveau chemin et type de LLM
+                    local_models_manager.configure(
+                        llm_path=llm_info.get("path"),
+                        llm_type=llm_info.get("model_type", "mistral")
+                    )
+                    st.info("💡 Le nouveau LLM sera chargé à la prochaine requête")
                 except Exception as e:
-                    st.info("💡 Le LLM sera chargé à la prochaine requête")
+                    st.warning(f"⚠️ Erreur lors de la reconfiguration: {e}")
 
             st.caption("🔹 Reranker : **BGE-Reranker**")
         else:
