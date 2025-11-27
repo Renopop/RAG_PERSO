@@ -33,6 +33,10 @@ from config_manager import (
     StorageConfig,
     validate_all_directories,
     create_directory,
+    is_local_mode,
+    switch_to_local_mode,
+    switch_to_api_mode,
+    initialize_local_models_if_needed,
 )
 from xml_processing import (
     XMLParseConfig,
@@ -513,9 +517,46 @@ if current_user in allowed_users:
 
         st.markdown("---")
 
-        st.markdown("### 🤖 Modèles utilisés")
-        st.caption(f"🔹 Embeddings : **Snowflake** – `{EMBED_MODEL}`")
-        st.caption(f"🔹 LLM : **DALLEM** – `{LLM_MODEL}`")
+        st.markdown("### 🤖 Mode de fonctionnement")
+
+        # Initialiser le mode hors ligne dans session_state
+        if "offline_mode" not in st.session_state:
+            st.session_state.offline_mode = is_local_mode()
+
+        # Checkbox pour activer le mode hors ligne (modèles locaux)
+        new_offline_mode = st.checkbox(
+            "🖥️ Mode hors ligne (modèles locaux)",
+            value=st.session_state.offline_mode,
+            help="Utilise les modèles locaux sur GPU (BGE-M3, Mistral/Qwen, BGE-Reranker) au lieu des APIs distantes",
+            key="offline_mode_checkbox"
+        )
+
+        # Gérer le changement de mode
+        if new_offline_mode != st.session_state.offline_mode:
+            st.session_state.offline_mode = new_offline_mode
+            if new_offline_mode:
+                # Basculer vers le mode local
+                switch_to_local_mode()
+                initialize_local_models_if_needed()
+                st.success("✅ Mode hors ligne activé")
+                st.info("💡 Les modèles locaux seront utilisés (GPU)")
+            else:
+                # Basculer vers le mode API
+                switch_to_api_mode()
+                st.success("✅ Mode API activé")
+                st.info("💡 Les APIs distantes seront utilisées (Snowflake/DALLEM)")
+            st.rerun()  # Recharger pour appliquer les changements
+
+        # Afficher les modèles utilisés selon le mode
+        if st.session_state.offline_mode:
+            st.caption("🔹 Mode : **Hors ligne (GPU)**")
+            st.caption("🔹 Embeddings : **BGE-M3**")
+            st.caption("🔹 LLM : **Mistral/Qwen (local)**")
+            st.caption("🔹 Reranker : **BGE-Reranker**")
+        else:
+            st.caption("🔹 Mode : **API (distant)**")
+            st.caption(f"🔹 Embeddings : **Snowflake** – `{EMBED_MODEL}`")
+            st.caption(f"🔹 LLM : **DALLEM** – `{LLM_MODEL}`")
 
 
 # ========================
@@ -1516,12 +1557,15 @@ with tab_confluence:
                 st.markdown("---")
                 st.markdown("### 🚀 Lancer la synchronisation")
 
-                # Sélection de la base cible
-                target_base = st.selectbox(
-                    "📂 Base FAISS cible",
-                    options=bases if bases else ["(Aucune base disponible)"],
-                    help="Base FAISS dans laquelle ingérer les pages Confluence"
-                )
+                # Base FAISS dédiée pour Confluence
+                CONFLUENCE_BASE_NAME = "CONFLUENCE"
+                confluence_db_path = os.path.join(BASE_ROOT_DIR, CONFLUENCE_BASE_NAME)
+
+                # Vérifier si la base existe et afficher le statut
+                if os.path.exists(confluence_db_path):
+                    st.success(f"📂 Base FAISS dédiée : **{CONFLUENCE_BASE_NAME}** (existante)")
+                else:
+                    st.info(f"📂 Base FAISS dédiée : **{CONFLUENCE_BASE_NAME}** (sera créée automatiquement)")
 
                 col_sync1, col_sync2 = st.columns(2)
 
@@ -1531,7 +1575,7 @@ with tab_confluence:
                         type="primary",
                         use_container_width=True,
                         help="Recharge toutes les pages de l'espace",
-                        disabled=not conf_config.is_valid()[0] or not bases
+                        disabled=not conf_config.is_valid()[0]
                     )
 
                 with col_sync2:
@@ -1539,7 +1583,7 @@ with tab_confluence:
                         "📥 Synchronisation incrémentale",
                         use_container_width=True,
                         help="Ne charge que les pages nouvelles ou modifiées",
-                        disabled=not conf_config.is_valid()[0] or not bases
+                        disabled=not conf_config.is_valid()[0]
                     )
 
                 # Exécution de la synchronisation
@@ -1547,8 +1591,6 @@ with tab_confluence:
                     is_valid, error_msg = conf_config.is_valid()
                     if not is_valid:
                         st.error(f"❌ Configuration invalide : {error_msg}")
-                    elif not bases:
-                        st.error("❌ Aucune base FAISS disponible")
                     else:
                         st.markdown("---")
                         progress_bar = st.progress(0)
@@ -1561,6 +1603,12 @@ with tab_confluence:
                             status_text.text(message)
 
                         try:
+                            # Créer la base CONFLUENCE si elle n'existe pas
+                            if not os.path.exists(confluence_db_path):
+                                os.makedirs(confluence_db_path, exist_ok=True)
+                                with log_container:
+                                    st.info(f"📂 Base FAISS '{CONFLUENCE_BASE_NAME}' créée")
+
                             # Créer le client
                             status_text.text("🔌 Connexion à Confluence...")
                             client = ConfluenceClient(conf_config)
@@ -1585,9 +1633,9 @@ with tab_confluence:
                                 with log_container:
                                     st.info(f"📄 CSV généré : {csv_path}")
 
-                                # Lancer l'ingestion
+                                # Lancer l'ingestion dans la base CONFLUENCE dédiée
                                 status_text.text("🚀 Ingestion dans FAISS...")
-                                db_path = os.path.join(BASE_ROOT_DIR, target_base)
+                                db_path = confluence_db_path
                                 collection_name = f"confluence_{conf_config.space_key}"
 
                                 # Charger le CSV et ingérer
