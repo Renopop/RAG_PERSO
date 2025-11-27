@@ -37,6 +37,7 @@ from config_manager import (
     switch_to_local_mode,
     switch_to_api_mode,
     initialize_local_models_if_needed,
+    AVAILABLE_LOCAL_LLMS,
 )
 from xml_processing import (
     XMLParseConfig,
@@ -551,7 +552,43 @@ if current_user in allowed_users:
         if st.session_state.offline_mode:
             st.caption("🔹 Mode : **Hors ligne (GPU)**")
             st.caption("🔹 Embeddings : **BGE-M3**")
-            st.caption("🔹 LLM : **Mistral/Qwen (local)**")
+
+            # Liste déroulante pour sélection du LLM local
+            current_config = load_config()
+            llm_options = list(AVAILABLE_LOCAL_LLMS.keys())
+            llm_labels = {k: v["name"] for k, v in AVAILABLE_LOCAL_LLMS.items()}
+
+            # Trouver l'index actuel
+            current_llm = current_config.selected_llm
+            current_idx = llm_options.index(current_llm) if current_llm in llm_options else 0
+
+            selected_llm = st.selectbox(
+                "🤖 LLM local",
+                options=llm_options,
+                index=current_idx,
+                format_func=lambda x: llm_labels.get(x, x),
+                help="Choisissez le modèle LLM à utiliser",
+                key="llm_selector"
+            )
+
+            # Afficher les infos du LLM sélectionné
+            llm_info = AVAILABLE_LOCAL_LLMS.get(selected_llm, {})
+            st.caption(f"   📊 VRAM requise : **{llm_info.get('vram_required_gb', 'N/A')} GB**")
+
+            # Gérer le changement de LLM
+            if selected_llm != current_config.selected_llm:
+                # Mettre à jour la config
+                current_config.selected_llm = selected_llm
+                save_config(current_config)
+
+                # Recharger le LLM si nécessaire
+                try:
+                    from local_models import local_models_manager
+                    local_models_manager.reload_llm(llm_info.get("model_type", "mistral"))
+                    st.success(f"✅ LLM changé : {llm_info.get('name', selected_llm)}")
+                except Exception as e:
+                    st.warning(f"⚠️ Le LLM sera chargé à la prochaine requête")
+
             st.caption("🔹 Reranker : **BGE-Reranker**")
         else:
             st.caption("🔹 Mode : **API (distant)**")
