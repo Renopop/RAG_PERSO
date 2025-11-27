@@ -520,74 +520,77 @@ if current_user in allowed_users:
 
         st.markdown("### 🤖 Mode de fonctionnement")
 
-        # Initialiser le mode hors ligne dans session_state
-        if "offline_mode" not in st.session_state:
-            st.session_state.offline_mode = is_local_mode()
+        # Charger la configuration actuelle
+        current_config = load_config()
+        is_currently_local = current_config.is_local_mode()
 
         # Checkbox pour activer le mode hors ligne (modèles locaux)
-        new_offline_mode = st.checkbox(
+        offline_mode_enabled = st.checkbox(
             "🖥️ Mode hors ligne (modèles locaux)",
-            value=st.session_state.offline_mode,
-            help="Utilise les modèles locaux sur GPU (BGE-M3, Mistral/Qwen, BGE-Reranker) au lieu des APIs distantes",
-            key="offline_mode_checkbox"
+            value=is_currently_local,
+            help="Utilise les modèles locaux sur GPU (BGE-M3, Mistral/Qwen, BGE-Reranker) au lieu des APIs distantes"
         )
 
         # Gérer le changement de mode
-        if new_offline_mode != st.session_state.offline_mode:
-            st.session_state.offline_mode = new_offline_mode
-            if new_offline_mode:
+        if offline_mode_enabled != is_currently_local:
+            if offline_mode_enabled:
                 # Basculer vers le mode local
-                switch_to_local_mode()
+                current_config.model_mode = "local"
+                save_config(current_config)
                 initialize_local_models_if_needed()
                 st.success("✅ Mode hors ligne activé")
-                st.info("💡 Les modèles locaux seront utilisés (GPU)")
+                st.rerun()
             else:
                 # Basculer vers le mode API
-                switch_to_api_mode()
+                current_config.model_mode = "api"
+                save_config(current_config)
                 st.success("✅ Mode API activé")
-                st.info("💡 Les APIs distantes seront utilisées (Snowflake/DALLEM)")
-            st.rerun()  # Recharger pour appliquer les changements
+                st.rerun()
 
         # Afficher les modèles utilisés selon le mode
-        if st.session_state.offline_mode:
+        if offline_mode_enabled:
             st.caption("🔹 Mode : **Hors ligne (GPU)**")
             st.caption("🔹 Embeddings : **BGE-M3**")
 
             # Liste déroulante pour sélection du LLM local
-            current_config = load_config()
             llm_options = list(AVAILABLE_LOCAL_LLMS.keys())
-            llm_labels = {k: v["name"] for k, v in AVAILABLE_LOCAL_LLMS.items()}
+            llm_names = [AVAILABLE_LOCAL_LLMS[k]["name"] for k in llm_options]
 
             # Trouver l'index actuel
-            current_llm = current_config.selected_llm
-            current_idx = llm_options.index(current_llm) if current_llm in llm_options else 0
+            current_llm_id = current_config.selected_llm
+            if current_llm_id not in llm_options:
+                current_llm_id = llm_options[0]
+            current_idx = llm_options.index(current_llm_id)
 
-            selected_llm = st.selectbox(
+            selected_idx = st.selectbox(
                 "🤖 LLM local",
-                options=llm_options,
+                options=range(len(llm_options)),
                 index=current_idx,
-                format_func=lambda x: llm_labels.get(x, x),
-                help="Choisissez le modèle LLM à utiliser",
-                key="llm_selector"
+                format_func=lambda i: llm_names[i],
+                help="Choisissez le modèle LLM à utiliser"
             )
 
+            selected_llm_id = llm_options[selected_idx]
+            llm_info = AVAILABLE_LOCAL_LLMS[selected_llm_id]
+
             # Afficher les infos du LLM sélectionné
-            llm_info = AVAILABLE_LOCAL_LLMS.get(selected_llm, {})
             st.caption(f"   📊 VRAM requise : **{llm_info.get('vram_required_gb', 'N/A')} GB**")
+            st.caption(f"   📝 {llm_info.get('description', '')}")
 
             # Gérer le changement de LLM
-            if selected_llm != current_config.selected_llm:
+            if selected_llm_id != current_config.selected_llm:
                 # Mettre à jour la config
-                current_config.selected_llm = selected_llm
+                current_config.selected_llm = selected_llm_id
                 save_config(current_config)
+                st.success(f"✅ LLM sélectionné : {llm_info['name']}")
 
                 # Recharger le LLM si nécessaire
                 try:
                     from local_models import local_models_manager
-                    local_models_manager.reload_llm(llm_info.get("model_type", "mistral"))
-                    st.success(f"✅ LLM changé : {llm_info.get('name', selected_llm)}")
+                    if local_models_manager._llm is not None:
+                        local_models_manager.reload_llm(llm_info.get("model_type", "mistral"))
                 except Exception as e:
-                    st.warning(f"⚠️ Le LLM sera chargé à la prochaine requête")
+                    st.info("💡 Le LLM sera chargé à la prochaine requête")
 
             st.caption("🔹 Reranker : **BGE-Reranker**")
         else:
