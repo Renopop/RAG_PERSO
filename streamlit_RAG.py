@@ -534,16 +534,15 @@ if current_user in allowed_users:
         # Gérer le changement de mode
         if offline_mode_enabled != is_currently_local:
             if offline_mode_enabled:
-                # Basculer vers le mode local
-                current_config.model_mode = "local"
-                save_config(current_config)
+                # Basculer vers le mode local avec les chemins locaux par défaut
+                switch_to_local_mode()
                 initialize_local_models_if_needed()
                 st.success("✅ Mode hors ligne activé")
+                st.info("📁 Répertoires locaux : D:\\FAISS_DATABASE\\...")
                 st.rerun()
             else:
-                # Basculer vers le mode API
-                current_config.model_mode = "api"
-                save_config(current_config)
+                # Basculer vers le mode API avec les chemins réseau
+                switch_to_api_mode()
                 st.success("✅ Mode API activé")
                 st.rerun()
 
