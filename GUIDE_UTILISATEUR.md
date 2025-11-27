@@ -16,6 +16,38 @@ L'application s'ouvre automatiquement dans votre navigateur sur `http://localhos
 
 ---
 
+## 🖥️ Choisir son mode : API ou Local
+
+Avant de commencer, choisissez votre mode de fonctionnement dans la **barre latérale** :
+
+### Mode API (par défaut)
+- ✅ Aucune installation GPU requise
+- ✅ Fonctionne sur tout ordinateur
+- ☁️ Utilise les APIs cloud (Snowflake, DALLEM, BGE Reranker)
+
+### Mode Local (GPU CUDA)
+- 🎮 Requiert un GPU NVIDIA avec 6+ GB VRAM
+- ⚡ Plus rapide pour les gros volumes
+- 🔒 Données 100% locales
+
+**Pour activer le mode local :**
+1. Dans la barre latérale, cochez **"🖥️ Utiliser les modèles locaux"**
+2. Configurez les chemins des modèles si nécessaire
+3. Sélectionnez le LLM souhaité dans le **menu déroulant**
+
+### Sélection du LLM local
+
+Deux modèles sont disponibles :
+
+| Modèle | Description | VRAM requise |
+|--------|-------------|--------------|
+| **Mistral 7B Instruct** | Bon équilibre performance/ressources | ~6 GB |
+| **Qwen 2.5 3B Instruct** | Léger et rapide | ~3 GB |
+
+Utilisez le **menu déroulant LLM** pour basculer entre les modèles. Le changement est instantané.
+
+---
+
 ## 📋 Les 5 onglets de l'application
 
 ### 📝 **Onglet 1 : Gestion CSV**
@@ -388,6 +420,35 @@ Visualisez les statistiques et tendances des retours utilisateurs.
 
 ## ❓ FAQ - Questions fréquentes
 
+### Mode Local et GPU
+
+**Q : Comment activer le mode local ?**
+- Dans la barre latérale, cochez **"🖥️ Utiliser les modèles locaux"**
+- Configurez les chemins des modèles (BGE-M3, Mistral/Qwen, BGE-Reranker)
+- Le système détecte automatiquement votre GPU
+
+**Q : Quelle GPU est requise pour le mode local ?**
+- GPU NVIDIA avec CUDA 11.8 ou supérieur
+- **Minimum** : 6 GB VRAM (pour Mistral 7B en 4-bit)
+- **Recommandé** : 8+ GB VRAM
+- Pour Qwen 2.5 3B : 3 GB VRAM suffisent
+
+**Q : Comment changer de LLM local ?**
+- Utilisez le **menu déroulant** dans la section "Configuration des modèles locaux"
+- Choix : Mistral 7B Instruct ou Qwen 2.5 3B Instruct
+- Le changement est instantané, pas besoin de redémarrer
+
+**Q : Que se passe-t-il si la VRAM est insuffisante ?**
+- Le système détecte automatiquement les erreurs OOM (Out of Memory)
+- **Fallback automatique** : réduction de la taille de batch
+- **Si échec** : basculement sur CPU (plus lent mais fiable)
+
+**Q : Où télécharger les modèles locaux ?**
+- **BGE-M3** : https://huggingface.co/BAAI/bge-m3
+- **Mistral 7B** : https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3
+- **Qwen 2.5 3B** : https://huggingface.co/Qwen/Qwen2.5-3B-Instruct
+- **BGE-Reranker** : https://huggingface.co/BAAI/bge-reranker-v2-m3
+
 ### Installation et Réseau
 
 **Q : Puis-je utiliser l'application sur un partage réseau Windows ?**
@@ -506,24 +567,38 @@ Pour toute question ou problème, contactez l'équipe de développement RaGME_UP
 
 ---
 
-## 🆕 Nouveautés de cette version (v1.4)
+## 🆕 Nouveautés de cette version (v1.5)
 
-### 📊 Extraction de tableaux PDF (NOUVEAU)
+### 🖥️ Mode Local avec GPU (NOUVEAU)
+- 🎮 **Support GPU NVIDIA** : CUDA avec gestion VRAM intelligente
+- 📊 **Batch adaptatif** : taille ajustée automatiquement selon la VRAM disponible
+- ⚠️ **Gestion OOM** : fallback automatique (batch réduit → CPU) en cas de mémoire insuffisante
+- 🔄 **Multi-LLM** : choix entre Mistral 7B et Qwen 2.5 3B via menu déroulant
+
+### 🤖 Modèles locaux supportés
+- **BGE-M3** : embeddings 1024 dimensions (comme Snowflake)
+- **Mistral 7B Instruct v0.3** : LLM 7B paramètres (~6 GB VRAM)
+- **Qwen 2.5 3B Instruct** : LLM 3B paramètres (~3 GB VRAM)
+- **BGE-Reranker-v2-M3** : re-ranking local
+
+### ⚡ Quantification 4-bit
+- Chargement optimisé des LLM avec BitsAndBytes
+- Réduction VRAM de ~50% sans perte de qualité significative
+
+### 📊 Extraction de tableaux PDF
 - 📋 **pdfplumber** : détection automatique des tableaux dans les PDF
 - 📝 **Formatage markdown** : tableaux formatés avec colonnes alignées
 - 🔄 **Triple fallback** : pdfplumber → pdfminer.six → PyMuPDF
 
-### ⚡ Améliorations de performance (NOUVEAU)
+### ⚡ Améliorations de performance
 - 🚀 **Cache Streamlit** : réponses instantanées pour requêtes répétées (30 min)
 - 📦 **BATCH_SIZE optimisé** : 32 (équilibre performance/sécurité)
 - 🔒 **Troncature automatique** : textes > 28000 chars tronqués (limite Snowflake)
 - 💾 **Cache FAISS** : stores cachés 10 min pour chargement rapide
 
-### 🌐 APIs uniquement
-- ✅ **Snowflake** : embeddings (snowflake-arctic-embed-l-v2.0)
-- ✅ **DALLEM** : génération de réponses (dallem-val)
-- ✅ **BGE Reranker** : re-ranking intelligent (bge-reranker-v2-m3)
-- ❌ Modèles locaux supprimés (simplification)
+### 🌐 Double mode : API ou Local
+- ✅ **Mode API** : Snowflake, DALLEM, BGE Reranker (cloud)
+- ✅ **Mode Local** : BGE-M3, Mistral/Qwen, BGE-Reranker (GPU)
 
 ### 🧠 Chunking Adaptatif Intelligent
 - 📊 **Analyse de densité** : détection automatique du type de contenu

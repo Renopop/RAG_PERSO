@@ -21,7 +21,7 @@ Documentation technique complète du système RAG pour développeurs et maintene
 
 ## Vue d'ensemble
 
-RaGME_UP PROP est un système RAG (Retrieval-Augmented Generation) conçu pour les documents techniques aéronautiques, avec support spécialisé pour les réglementations EASA (CS, AMC, GM).
+RaGME_UP PROP est un système RAG (Retrieval-Augmented Generation) conçu pour les documents techniques aéronautiques, avec support spécialisé pour les réglementations EASA (CS, AMC, GM). Le système supporte deux modes : **API distantes** ou **modèles locaux** avec gestion CUDA/VRAM intelligente.
 
 ### Architecture globale
 
@@ -56,8 +56,9 @@ RaGME_UP PROP est un système RAG (Retrieval-Augmented Generation) conçu pour l
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    EMBEDDINGS & STOCKAGE                         │
-│  models_utils.py | faiss_store.py                               │
-│  - Snowflake Arctic API (1024 dims)                             │
+│  models_utils.py | faiss_store.py | local_models.py             │
+│  Mode API: Snowflake Arctic (1024 dims)                         │
+│  Mode Local: BGE-M3 (1024 dims) + CUDA/VRAM management          │
 │  - FAISS index par collection                                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -90,9 +91,12 @@ RAG_v3/
 ├── faiss_store.py            # Gestion FAISS (12 KB)
 ├── feedback_store.py         # Stockage feedbacks (24 KB)
 │
+├── # === MODÈLES LOCAUX ===
+├── local_models.py           # Gestion modèles locaux CUDA (45 KB)
+│
 ├── # === CONFIGURATION ===
-├── config_manager.py         # Gestion chemins (14 KB)
-├── models_utils.py           # Embeddings/LLM (31 KB)
+├── config_manager.py         # Gestion chemins + config locale (20 KB)
+├── models_utils.py           # Embeddings/LLM unifiés (35 KB)
 │
 ├── # === SCRIPTS ===
 ├── install.bat               # Installation Windows
@@ -772,7 +776,7 @@ def validate_all_directories(config: StorageConfig) -> dict:
 
 ## API et modèles
 
-Le système utilise exclusivement des APIs externes pour les modèles d'IA.
+Le système supporte deux modes : **API distantes** ou **modèles locaux**.
 
 ### Embeddings (`models_utils.py`)
 
@@ -816,9 +820,294 @@ def rerank_with_bge(query: str, documents: List[str], top_k: int) -> List[dict]:
 
 ---
 
+## Modèles locaux (`local_models.py`)
+
+Le module `local_models.py` implémente le support complet des modèles locaux avec gestion CUDA/VRAM.
+
+### Architecture des modèles locaux
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      CUDAManager (Singleton)                     │
+│  - Détection GPU automatique                                     │
+│  - Monitoring VRAM en temps réel                                 │
+│  - Calcul batch size adaptatif                                   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+          ┌───────────────────┼───────────────────┐
+          ▼                   ▼                   ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│ LocalEmbeddings │  │    LocalLLM     │  │  LocalReranker  │
+│   (BGE-M3)      │  │ (Mistral/Qwen)  │  │ (BGE-Reranker)  │
+└─────────────────┘  └─────────────────┘  └─────────────────┘
+          │                   │                   │
+          └───────────────────┼───────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                 LocalModelsManager (Singleton)                   │
+│  - Lazy loading des modèles                                      │
+│  - Gestion mémoire centralisée                                   │
+│  - Interface unifiée                                             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### CUDAManager
+
+```python
+class CUDAManager:
+    """Gestionnaire singleton pour CUDA et VRAM."""
+
+    def get_device(self) -> str:
+        """Retourne 'cuda' si disponible, sinon 'cpu'"""
+
+    def get_vram_info(self) -> dict:
+        """
+        Retourne info VRAM:
+        {
+            'total_gb': 8.0,
+            'used_gb': 2.5,
+            'free_gb': 5.5,
+            'utilization': 0.31
+        }
+        """
+
+    def get_optimal_batch_size(
+        self,
+        model_type: str,  # 'embedding', 'llm', 'reranker'
+        base_batch_size: int = 32
+    ) -> int:
+        """Calcule batch optimal selon VRAM disponible"""
+
+    def clear_cache(self):
+        """Libère cache CUDA"""
+```
+
+### BatchConfig
+
+```python
+@dataclass
+class BatchConfig:
+    """Configuration de batch adaptatif."""
+    initial_size: int = 32
+    min_size: int = 1
+    max_size: int = 128
+    reduction_factor: float = 0.5
+
+    def reduce(self) -> 'BatchConfig':
+        """Réduit la taille de batch après OOM"""
+```
+
+### LocalEmbeddings (BGE-M3)
+
+```python
+class LocalEmbeddings:
+    """Embeddings locaux avec BGE-M3."""
+
+    def __init__(
+        self,
+        model_path: str = r"D:\IA_Test\models\BAAI\bge-m3",
+        device: str = None  # Auto-détecté si None
+    ):
+        self.dimension = 1024  # Même dimension que Snowflake
+
+    def embed_documents(
+        self,
+        texts: List[str],
+        batch_size: int = None  # Auto-adaptatif si None
+    ) -> np.ndarray:
+        """
+        Embedding avec gestion OOM automatique.
+        Fallback: batch réduit → CPU si échec.
+        """
+
+    def embed_query(self, text: str) -> np.ndarray:
+        """Embedding d'une seule requête"""
+```
+
+### LocalLLM (Mistral/Qwen)
+
+```python
+class LocalLLM:
+    """LLM local avec support multi-modèles."""
+
+    SUPPORTED_TYPES = ["mistral", "qwen", "llama", "generic"]
+
+    def __init__(
+        self,
+        model_path: str,
+        model_type: str = "mistral",  # ou "qwen", "llama", "generic"
+        device: str = None,
+        load_in_4bit: bool = True,
+        load_in_8bit: bool = False
+    ):
+        """
+        Chargement avec quantification BitsAndBytes.
+        4-bit par défaut pour économiser VRAM.
+        """
+
+    def generate(
+        self,
+        messages: List[Dict[str, str]],
+        max_new_tokens: int = 1024,
+        temperature: float = 0.7,
+        top_p: float = 0.9
+    ) -> str:
+        """
+        Génération avec format adapté au type de modèle.
+
+        Messages format:
+        [
+            {"role": "system", "content": "..."},
+            {"role": "user", "content": "..."}
+        ]
+        """
+
+    def _format_messages(self, messages: List[Dict[str, str]]) -> str:
+        """Formate selon le type de modèle"""
+
+    def _format_mistral(self, messages) -> str:
+        """Format Mistral: <s>[INST]...[/INST]"""
+
+    def _format_qwen(self, messages) -> str:
+        """Format Qwen ChatML: <|im_start|>role\ncontent<|im_end|>"""
+
+    def _format_llama(self, messages) -> str:
+        """Format Llama 2/3: <s>[INST]<<SYS>>...<</SYS>>...[/INST]"""
+```
+
+### LocalReranker (BGE-Reranker-v2-M3)
+
+```python
+class LocalReranker:
+    """Reranker local avec BGE-Reranker-v2-M3."""
+
+    def __init__(
+        self,
+        model_path: str = r"D:\IA_Test\models\BAAI\bge-reranker-v2-m3",
+        device: str = None
+    ):
+        pass
+
+    def rerank(
+        self,
+        query: str,
+        documents: List[str],
+        top_k: int = 10,
+        batch_size: int = None  # Auto-adaptatif
+    ) -> List[Dict]:
+        """
+        Re-ranking avec scores de pertinence.
+
+        Retourne:
+        [
+            {'index': 0, 'score': 0.95, 'text': '...'},
+            {'index': 2, 'score': 0.87, 'text': '...'},
+            ...
+        ]
+        """
+```
+
+### LocalModelsManager (Point d'entrée)
+
+```python
+class LocalModelsManager:
+    """Gestionnaire centralisé des modèles locaux (Singleton)."""
+
+    _instance = None
+
+    def __init__(self, config: LocalModelsConfig = None):
+        self.embeddings: LocalEmbeddings = None
+        self.llm: LocalLLM = None
+        self.reranker: LocalReranker = None
+
+    @classmethod
+    def get_instance(cls, config=None) -> 'LocalModelsManager':
+        """Singleton pattern"""
+
+    def get_embeddings(self) -> LocalEmbeddings:
+        """Lazy loading des embeddings"""
+
+    def get_llm(self) -> LocalLLM:
+        """Lazy loading du LLM"""
+
+    def get_reranker(self) -> LocalReranker:
+        """Lazy loading du reranker"""
+
+    def reload_llm(self, model_type: str = None):
+        """Recharge le LLM (pour changement de modèle)"""
+
+    def clear_all(self):
+        """Libère tous les modèles et VRAM"""
+```
+
+### Gestion OOM (Out of Memory)
+
+Le système gère automatiquement les erreurs de mémoire GPU :
+
+```
+Tentative embedding batch=32
+         │
+         ▼
+    ┌────────────┐
+    │ OOM Error? │
+    └─────┬──────┘
+          │ Oui
+          ▼
+┌─────────────────────┐
+│ Réduire batch (x0.5)│
+│ batch=16            │
+└─────────┬───────────┘
+          │
+          ▼
+    ┌────────────┐
+    │ OOM Error? │
+    └─────┬──────┘
+          │ Oui
+          ▼
+┌─────────────────────┐
+│ Réduire batch (x0.5)│
+│ batch=8             │
+└─────────┬───────────┘
+          │
+          ▼
+    ┌────────────┐
+    │ batch < 1? │
+    └─────┬──────┘
+          │ Oui
+          ▼
+┌─────────────────────┐
+│ Fallback CPU        │
+│ (lent mais fiable)  │
+└─────────────────────┘
+```
+
+### Configuration des LLM disponibles
+
+```python
+# config_manager.py
+AVAILABLE_LOCAL_LLMS = {
+    "mistral-7b": {
+        "name": "Mistral 7B Instruct v0.3",
+        "path": r"D:\IA_Test\models\mistralai\Mistral-7B-Instruct-v0.3",
+        "description": "Modèle 7B paramètres, bon équilibre performance/ressources",
+        "vram_required_gb": 6.0,
+        "model_type": "mistral",
+    },
+    "qwen-3b": {
+        "name": "Qwen 2.5 3B Instruct",
+        "path": r"D:\IA_Test\models\Qwen\Qwen2.5-3B-Instruct",
+        "description": "Modèle 3B paramètres, léger et rapide",
+        "vram_required_gb": 3.0,
+        "model_type": "qwen",
+    },
+}
+```
+
+---
+
 ## Dépendances
 
-### requirements.txt
+### requirements.txt (Mode API)
 
 ```
 # Interface
@@ -848,6 +1137,23 @@ requests>=2.31.0
 numpy>=1.24.0
 packaging>=23.0
 ```
+
+### Dépendances supplémentaires (Mode Local GPU)
+
+```bash
+# PyTorch avec CUDA 11.8
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Transformers et accélération
+pip install transformers>=4.36.0
+pip install accelerate>=0.25.0
+pip install bitsandbytes>=0.41.0  # Quantification 4-bit/8-bit
+
+# Sentence Transformers pour BGE-M3
+pip install sentence-transformers>=2.2.0
+```
+
+**Note CUDA** : La version CUDA de PyTorch doit correspondre à la version CUDA installée sur le système. Pour CUDA 12.x, utiliser `cu121` au lieu de `cu118`.
 
 ### Bibliothèques natives Python utilisées
 
@@ -891,5 +1197,5 @@ logging.basicConfig(
 
 ---
 
-**Version:** 1.4
+**Version:** 1.5
 **Dernière mise à jour:** 2025-11-27
