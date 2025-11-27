@@ -24,7 +24,10 @@ chardet>=5.1.0
 # API et modèles (Snowflake Arctic + DALLEM)
 openai>=1.0.0
 httpx>=0.24.0
-requests>=2.31.0  # Fallback pour appels HTTP
+requests>=2.31.0  # Fallback pour appels HTTP + Confluence API
+
+# Confluence (optionnel - pour l'ingestion Confluence)
+beautifulsoup4>=4.12.0  # Extraction HTML des pages Confluence
 
 # Utilitaires
 numpy>=1.24.0

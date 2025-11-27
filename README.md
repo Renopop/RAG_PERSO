@@ -39,6 +39,7 @@ L'application s'ouvre automatiquement dans votre navigateur sur `http://localhos
 
 - 📝 **Gestion CSV** avec interface GUI moderne
 - 📥 **Ingestion documents** (PDF, DOCX, TXT) avec tracking automatique
+- 🔗 **Ingestion Confluence** : synchronisation d'espaces Confluence entiers (hebdomadaire)
 - 🔒 **Coordination multi-utilisateurs** avec système de verrous
 - 🗑️ **Purge des bases** FAISS
 - ❓ **Questions RAG** avec recherche sémantique et génération de réponses
@@ -493,3 +494,4 @@ Consultez la documentation pour toute question :
 - 🔄 **Multi-LLM** : Menu déroulant pour choisir entre Mistral 7B et Qwen 2.5 3B
 - ⚡ **Quantification 4-bit** : Chargement optimisé avec BitsAndBytes
 - 📁 **Stockage local** : Répertoires FAISS configurables pour mode local
+- 🔗 **Ingestion Confluence** : Synchronisation d'espaces Confluence entiers avec planification hebdomadaire
