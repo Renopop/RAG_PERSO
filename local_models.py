@@ -491,17 +491,22 @@ class LocalEmbeddings:
 
 class LocalLLM:
     """
-    Client LLM local utilisant Mistral-7B-Instruct.
+    Client LLM local supportant plusieurs modeles (Mistral, Qwen, etc.).
 
     Gere automatiquement:
     - Le chargement avec quantization si necessaire
     - Les erreurs OOM avec fallback
     - La generation de texte avec parametres ajustables
+    - Le formatage des prompts selon le type de modele
     """
+
+    # Types de modeles supportes
+    SUPPORTED_TYPES = ["mistral", "qwen", "llama", "generic"]
 
     def __init__(
         self,
         model_path: str,
+        model_type: str = "mistral",
         device: Optional[str] = None,
         load_in_8bit: bool = False,
         load_in_4bit: bool = True,  # 4-bit par defaut pour economiser la VRAM
@@ -510,7 +515,8 @@ class LocalLLM:
     ):
         """
         Args:
-            model_path: Chemin vers le modele Mistral
+            model_path: Chemin vers le modele
+            model_type: Type de modele ('mistral', 'qwen', 'llama', 'generic')
             device: 'cuda', 'cpu' ou None (auto)
             load_in_8bit: Charger en 8-bit quantization
             load_in_4bit: Charger en 4-bit quantization (prioritaire)
@@ -518,6 +524,7 @@ class LocalLLM:
             logger: Logger optionnel
         """
         self.model_path = model_path
+        self.model_type = model_type.lower() if model_type else "mistral"
         self.max_new_tokens = max_new_tokens
         self.log = logger or logging.getLogger(__name__)
 
@@ -527,7 +534,25 @@ class LocalLLM:
         self.load_in_8bit = load_in_8bit
         self.load_in_4bit = load_in_4bit
 
+        # Detecter automatiquement le type si non specifie
+        if self.model_type not in self.SUPPORTED_TYPES:
+            self.model_type = self._detect_model_type()
+
+        self.log.info(f"[LLM-LOCAL] Type de modele: {self.model_type}")
         self._load_model()
+
+    def _detect_model_type(self) -> str:
+        """Detecte automatiquement le type de modele a partir du chemin."""
+        path_lower = self.model_path.lower()
+
+        if "mistral" in path_lower:
+            return "mistral"
+        elif "qwen" in path_lower:
+            return "qwen"
+        elif "llama" in path_lower:
+            return "llama"
+        else:
+            return "generic"
 
     def _load_model(self):
         """Charge le modele LLM."""
@@ -672,8 +697,19 @@ class LocalLLM:
 
     def _format_messages(self, messages: List[Dict[str, str]]) -> str:
         """
-        Formate les messages au format Mistral Instruct.
+        Formate les messages selon le type de modele.
         """
+        if self.model_type == "mistral":
+            return self._format_mistral(messages)
+        elif self.model_type == "qwen":
+            return self._format_qwen(messages)
+        elif self.model_type == "llama":
+            return self._format_llama(messages)
+        else:
+            return self._format_generic(messages)
+
+    def _format_mistral(self, messages: List[Dict[str, str]]) -> str:
+        """Format Mistral Instruct."""
         formatted = ""
         for msg in messages:
             role = msg["role"]
@@ -689,6 +725,59 @@ class LocalLLM:
             elif role == "assistant":
                 formatted += f" {content}</s>"
 
+        return formatted
+
+    def _format_qwen(self, messages: List[Dict[str, str]]) -> str:
+        """Format Qwen2.5 Instruct (ChatML format)."""
+        formatted = ""
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+
+            formatted += f"<|im_start|>{role}\n{content}<|im_end|>\n"
+
+        # Ajouter le debut de la reponse assistant
+        formatted += "<|im_start|>assistant\n"
+
+        return formatted
+
+    def _format_llama(self, messages: List[Dict[str, str]]) -> str:
+        """Format Llama 2/3 Instruct."""
+        formatted = "<s>"
+        system_content = ""
+
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+
+            if role == "system":
+                system_content = content
+            elif role == "user":
+                if system_content:
+                    formatted += f"[INST] <<SYS>>\n{system_content}\n<</SYS>>\n\n{content} [/INST]"
+                    system_content = ""
+                else:
+                    formatted += f"[INST] {content} [/INST]"
+            elif role == "assistant":
+                formatted += f" {content} </s><s>"
+
+        return formatted
+
+    def _format_generic(self, messages: List[Dict[str, str]]) -> str:
+        """Format generique simple."""
+        formatted = ""
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+
+            if role == "system":
+                formatted += f"System: {content}\n\n"
+            elif role == "user":
+                formatted += f"User: {content}\n\n"
+            elif role == "assistant":
+                formatted += f"Assistant: {content}\n\n"
+
+        formatted += "Assistant: "
         return formatted
 
     def chat_completion(
@@ -932,6 +1021,7 @@ class LocalModelsManager:
         self.embedding_path: Optional[str] = None
         self.llm_path: Optional[str] = None
         self.reranker_path: Optional[str] = None
+        self.llm_type: str = "mistral"  # Type de LLM (mistral, qwen, etc.)
 
         self._initialized = True
 
@@ -939,13 +1029,23 @@ class LocalModelsManager:
         self,
         embedding_path: Optional[str] = None,
         llm_path: Optional[str] = None,
-        reranker_path: Optional[str] = None
+        reranker_path: Optional[str] = None,
+        llm_type: Optional[str] = None
     ):
         """Configure les chemins des modeles."""
+        # Si le chemin ou le type LLM change, decharger le modele
+        if llm_path and (llm_path != self.llm_path or llm_type != self.llm_type):
+            if self.llm_model is not None:
+                logger.info("[LOCAL] Changement de LLM detecte, dechargement du modele actuel")
+                self.llm_model = None
+                cuda_manager.clear_cuda_cache()
+
         if embedding_path:
             self.embedding_path = embedding_path
         if llm_path:
             self.llm_path = llm_path
+        if llm_type:
+            self.llm_type = llm_type
         if reranker_path:
             self.reranker_path = reranker_path
 
@@ -962,7 +1062,11 @@ class LocalModelsManager:
         """Retourne le LLM (charge paresseusement)."""
         if self.llm_model is None and self.llm_path:
             if os.path.exists(self.llm_path):
-                self.llm_model = LocalLLM(self.llm_path)
+                logger.info(f"[LOCAL] Chargement du LLM type={self.llm_type}")
+                self.llm_model = LocalLLM(
+                    model_path=self.llm_path,
+                    model_type=self.llm_type
+                )
             else:
                 logger.warning(f"[LOCAL] Chemin LLM non trouve: {self.llm_path}")
         return self.llm_model
@@ -1019,6 +1123,7 @@ class LocalModelsManager:
             "llm": {
                 "configured": self.llm_path is not None,
                 "path": self.llm_path,
+                "type": self.llm_type,
                 "loaded": self.llm_model is not None,
                 "exists": self.has_llm_model(),
             },
@@ -1042,10 +1147,11 @@ local_models_manager = LocalModelsManager()
 def configure_local_models(
     embedding_path: Optional[str] = None,
     llm_path: Optional[str] = None,
-    reranker_path: Optional[str] = None
+    reranker_path: Optional[str] = None,
+    llm_type: Optional[str] = None
 ):
     """Configure les modeles locaux (fonction utilitaire)."""
-    local_models_manager.configure(embedding_path, llm_path, reranker_path)
+    local_models_manager.configure(embedding_path, llm_path, reranker_path, llm_type)
 
 
 def get_cuda_status() -> Dict[str, Any]:

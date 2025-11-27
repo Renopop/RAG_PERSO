@@ -46,6 +46,25 @@ DEFAULT_LOCAL_CONFIG = {
     "local_embedding_path": r"D:\IA_Test\models\BAAI\bge-m3",
     "local_llm_path": r"D:\IA_Test\models\mistralai\Mistral-7B-Instruct-v0.3",
     "local_reranker_path": r"D:\IA_Test\models\BAAI\bge-reranker-v2-m3",
+    "selected_llm": "mistral-7b",  # LLM sélectionné par défaut
+}
+
+# Catalogue des LLMs locaux disponibles
+AVAILABLE_LOCAL_LLMS = {
+    "mistral-7b": {
+        "name": "Mistral 7B Instruct v0.3",
+        "path": r"D:\IA_Test\models\mistralai\Mistral-7B-Instruct-v0.3",
+        "description": "Modèle 7B paramètres, bon équilibre performance/ressources",
+        "vram_required_gb": 6.0,  # En 4-bit quantization
+        "model_type": "mistral",
+    },
+    "qwen-3b": {
+        "name": "Qwen 2.5 3B Instruct",
+        "path": r"D:\IA_Test\models\Qwen\Qwen2.5-3B-Instruct",
+        "description": "Modèle 3B paramètres, léger et rapide",
+        "vram_required_gb": 3.0,  # En 4-bit quantization
+        "model_type": "qwen",
+    },
 }
 
 
@@ -55,6 +74,7 @@ class LocalModelsConfig:
     embedding_path: str = ""
     llm_path: str = ""
     reranker_path: str = ""
+    selected_llm: str = "mistral-7b"  # ID du LLM sélectionné
 
     def to_dict(self) -> Dict[str, str]:
         return asdict(self)
@@ -65,11 +85,30 @@ class LocalModelsConfig:
             embedding_path=data.get("local_embedding_path", ""),
             llm_path=data.get("local_llm_path", ""),
             reranker_path=data.get("local_reranker_path", ""),
+            selected_llm=data.get("selected_llm", "mistral-7b"),
         )
 
     def has_any_model(self) -> bool:
         """Vérifie si au moins un modèle local est configuré."""
         return bool(self.embedding_path or self.llm_path or self.reranker_path)
+
+    def get_selected_llm_info(self) -> Optional[Dict]:
+        """Retourne les infos du LLM sélectionné."""
+        return AVAILABLE_LOCAL_LLMS.get(self.selected_llm)
+
+    def get_selected_llm_path(self) -> str:
+        """Retourne le chemin du LLM sélectionné."""
+        llm_info = self.get_selected_llm_info()
+        if llm_info:
+            return llm_info["path"]
+        return self.llm_path  # Fallback sur le chemin configuré
+
+    def get_selected_llm_type(self) -> str:
+        """Retourne le type du LLM sélectionné (mistral, qwen, etc.)."""
+        llm_info = self.get_selected_llm_info()
+        if llm_info:
+            return llm_info.get("model_type", "mistral")
+        return "mistral"  # Default
 
     def validate_paths(self) -> Dict[str, Tuple[bool, str]]:
         """Valide que les chemins des modèles existent."""
@@ -77,12 +116,19 @@ class LocalModelsConfig:
         if self.embedding_path:
             exists = os.path.exists(self.embedding_path)
             results["embedding"] = (exists, self.embedding_path if exists else f"Non trouvé: {self.embedding_path}")
-        if self.llm_path:
-            exists = os.path.exists(self.llm_path)
-            results["llm"] = (exists, self.llm_path if exists else f"Non trouvé: {self.llm_path}")
+
+        # Valider le LLM sélectionné
+        llm_path = self.get_selected_llm_path()
+        if llm_path:
+            exists = os.path.exists(llm_path)
+            llm_info = self.get_selected_llm_info()
+            llm_name = llm_info["name"] if llm_info else "LLM"
+            results["llm"] = (exists, f"{llm_name}: {llm_path}" if exists else f"Non trouvé: {llm_path}")
+
         if self.reranker_path:
             exists = os.path.exists(self.reranker_path)
             results["reranker"] = (exists, self.reranker_path if exists else f"Non trouvé: {self.reranker_path}")
+
         return results
 
 
@@ -99,6 +145,8 @@ class StorageConfig:
     local_embedding_path: str = ""
     local_llm_path: str = ""
     local_reranker_path: str = ""
+    # LLM sélectionné (ID dans AVAILABLE_LOCAL_LLMS)
+    selected_llm: str = "mistral-7b"
 
     def to_dict(self) -> Dict[str, str]:
         return asdict(self)
@@ -114,6 +162,7 @@ class StorageConfig:
             local_embedding_path=data.get("local_embedding_path", ""),
             local_llm_path=data.get("local_llm_path", ""),
             local_reranker_path=data.get("local_reranker_path", ""),
+            selected_llm=data.get("selected_llm", "mistral-7b"),
         )
 
     def is_local_mode(self) -> bool:
@@ -126,7 +175,22 @@ class StorageConfig:
             embedding_path=self.local_embedding_path,
             llm_path=self.local_llm_path,
             reranker_path=self.local_reranker_path,
+            selected_llm=self.selected_llm,
         )
+
+    def get_selected_llm_path(self) -> str:
+        """Retourne le chemin du LLM sélectionné."""
+        llm_info = AVAILABLE_LOCAL_LLMS.get(self.selected_llm)
+        if llm_info:
+            return llm_info["path"]
+        return self.local_llm_path  # Fallback
+
+    def get_selected_llm_type(self) -> str:
+        """Retourne le type du LLM sélectionné."""
+        llm_info = AVAILABLE_LOCAL_LLMS.get(self.selected_llm)
+        if llm_info:
+            return llm_info.get("model_type", "mistral")
+        return "mistral"
 
     @classmethod
     def create_local_config(cls) -> "StorageConfig":
@@ -140,6 +204,7 @@ class StorageConfig:
             local_embedding_path=DEFAULT_LOCAL_CONFIG["local_embedding_path"],
             local_llm_path=DEFAULT_LOCAL_CONFIG["local_llm_path"],
             local_reranker_path=DEFAULT_LOCAL_CONFIG["local_reranker_path"],
+            selected_llm=DEFAULT_LOCAL_CONFIG.get("selected_llm", "mistral-7b"),
         )
 
 
@@ -487,8 +552,24 @@ def get_local_embedding_path() -> str:
 
 
 def get_local_llm_path() -> str:
-    """Retourne le chemin du LLM local."""
-    return load_config().local_llm_path
+    """Retourne le chemin du LLM local sélectionné."""
+    return load_config().get_selected_llm_path()
+
+
+def get_selected_llm_id() -> str:
+    """Retourne l'ID du LLM sélectionné."""
+    return load_config().selected_llm
+
+
+def get_selected_llm_type() -> str:
+    """Retourne le type du LLM sélectionné (mistral, qwen, etc.)."""
+    return load_config().get_selected_llm_type()
+
+
+def get_selected_llm_info() -> Optional[Dict]:
+    """Retourne les informations du LLM sélectionné."""
+    config = load_config()
+    return AVAILABLE_LOCAL_LLMS.get(config.selected_llm)
 
 
 def get_local_reranker_path() -> str:
@@ -562,22 +643,51 @@ def render_local_models_config_streamlit():
         except ImportError:
             st.warning("Module local_models non disponible")
 
-        st.markdown("#### Chemins des modèles")
+        st.markdown("#### Modèle d'embeddings")
 
         new_embedding_path = st.text_input(
-            "Modèle d'embeddings (BGE-M3)",
+            "Chemin du modèle BGE-M3",
             value=config.local_embedding_path or DEFAULT_LOCAL_CONFIG["local_embedding_path"],
             help="Chemin vers le modèle BGE-M3 pour les embeddings"
         )
 
-        new_llm_path = st.text_input(
-            "LLM (Mistral-7B-Instruct)",
-            value=config.local_llm_path or DEFAULT_LOCAL_CONFIG["local_llm_path"],
-            help="Chemin vers le modèle Mistral pour la génération de réponses"
+        st.markdown("#### Modèle LLM (génération de texte)")
+
+        # Menu déroulant pour sélectionner le LLM
+        llm_options = list(AVAILABLE_LOCAL_LLMS.keys())
+        llm_display_names = [
+            f"{AVAILABLE_LOCAL_LLMS[k]['name']} ({AVAILABLE_LOCAL_LLMS[k]['vram_required_gb']:.1f} GB VRAM)"
+            for k in llm_options
+        ]
+
+        # Trouver l'index du LLM actuellement sélectionné
+        current_llm_idx = 0
+        if config.selected_llm in llm_options:
+            current_llm_idx = llm_options.index(config.selected_llm)
+
+        selected_llm_display = st.selectbox(
+            "Sélectionner le LLM",
+            options=llm_display_names,
+            index=current_llm_idx,
+            help="Choisissez le modèle LLM à utiliser pour la génération de réponses"
         )
 
+        # Récupérer l'ID du LLM sélectionné
+        selected_llm_idx = llm_display_names.index(selected_llm_display)
+        selected_llm_id = llm_options[selected_llm_idx]
+        selected_llm_info = AVAILABLE_LOCAL_LLMS[selected_llm_id]
+
+        # Afficher les infos du LLM sélectionné
+        st.caption(f"**Description:** {selected_llm_info['description']}")
+        st.caption(f"**Chemin:** `{selected_llm_info['path']}`")
+
+        # Stocker le chemin du LLM sélectionné
+        new_llm_path = selected_llm_info['path']
+
+        st.markdown("#### Modèle Reranker")
+
         new_reranker_path = st.text_input(
-            "Reranker (BGE-Reranker-v2-M3)",
+            "Chemin du modèle BGE-Reranker-v2-M3",
             value=config.local_reranker_path or DEFAULT_LOCAL_CONFIG["local_reranker_path"],
             help="Chemin vers le modèle BGE-Reranker pour le re-ranking"
         )
@@ -586,25 +696,41 @@ def render_local_models_config_streamlit():
         st.markdown("#### Statut des modèles")
         models_valid = True
 
-        for name, path in [
-            ("Embeddings", new_embedding_path),
-            ("LLM", new_llm_path),
-            ("Reranker", new_reranker_path)
-        ]:
-            if path:
-                if os.path.exists(path):
-                    st.success(f"✅ {name}: `{path}`")
-                else:
-                    st.error(f"❌ {name}: Chemin non trouvé - `{path}`")
-                    models_valid = False
+        # Vérifier l'embedding
+        if new_embedding_path:
+            if os.path.exists(new_embedding_path):
+                st.success(f"✅ Embeddings (BGE-M3): `{new_embedding_path}`")
             else:
-                st.warning(f"⚠️ {name}: Non configuré")
+                st.error(f"❌ Embeddings: Chemin non trouvé - `{new_embedding_path}`")
+                models_valid = False
+        else:
+            st.warning("⚠️ Embeddings: Non configuré")
+
+        # Vérifier le LLM
+        if new_llm_path:
+            if os.path.exists(new_llm_path):
+                st.success(f"✅ LLM ({selected_llm_info['name']}): `{new_llm_path}`")
+            else:
+                st.error(f"❌ LLM ({selected_llm_info['name']}): Chemin non trouvé - `{new_llm_path}`")
+                models_valid = False
+
+        # Vérifier le reranker
+        if new_reranker_path:
+            if os.path.exists(new_reranker_path):
+                st.success(f"✅ Reranker (BGE-Reranker): `{new_reranker_path}`")
+            else:
+                st.error(f"❌ Reranker: Chemin non trouvé - `{new_reranker_path}`")
+                models_valid = False
+        else:
+            st.warning("⚠️ Reranker: Non configuré")
 
         return {
             "is_local": True,
             "embedding_path": new_embedding_path,
             "llm_path": new_llm_path,
             "reranker_path": new_reranker_path,
+            "selected_llm": selected_llm_id,
+            "selected_llm_type": selected_llm_info.get("model_type", "mistral"),
             "valid": models_valid
         }
 
@@ -632,15 +758,23 @@ def initialize_local_models_if_needed():
     try:
         from local_models import configure_local_models
 
+        # Récupérer le chemin et le type du LLM sélectionné
+        llm_path = config.get_selected_llm_path()
+        llm_type = config.get_selected_llm_type()
+        llm_info = AVAILABLE_LOCAL_LLMS.get(config.selected_llm, {})
+        llm_name = llm_info.get("name", config.selected_llm)
+
         configure_local_models(
             embedding_path=config.local_embedding_path,
-            llm_path=config.local_llm_path,
-            reranker_path=config.local_reranker_path
+            llm_path=llm_path,
+            reranker_path=config.local_reranker_path,
+            llm_type=llm_type
         )
 
         print(f"[CONFIG] Modèles locaux configurés:")
         print(f"  - Embeddings: {config.local_embedding_path}")
-        print(f"  - LLM: {config.local_llm_path}")
+        print(f"  - LLM ({llm_name}): {llm_path}")
+        print(f"  - LLM Type: {llm_type}")
         print(f"  - Reranker: {config.local_reranker_path}")
 
     except ImportError as e:
