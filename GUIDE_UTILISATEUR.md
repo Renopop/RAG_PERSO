@@ -48,7 +48,7 @@ Utilisez le **menu déroulant LLM** pour basculer entre les modèles. Le changem
 
 ---
 
-## 📋 Les 5 onglets de l'application
+## 📋 Les 6 onglets de l'application
 
 ### 📝 **Onglet 1 : Gestion CSV**
 
@@ -257,7 +257,56 @@ Chaque chunk est enrichi automatiquement :
 
 ---
 
-### 🗑️ **Onglet 3 : Purge des bases**
+### 🔗 **Onglet 3 : Ingestion Confluence**
+
+Synchronisez un **espace Confluence entier** vers le système RAG.
+
+#### 🎯 Pourquoi utiliser cette fonctionnalité ?
+
+- 📥 **Chargement en masse** : récupère toutes les pages d'un espace
+- 🔄 **Synchronisation périodique** : planification hebdomadaire (configurable)
+- 🏷️ **Filtrage par labels** : inclure/exclure des pages selon leurs labels
+- 📎 **Pièces jointes** : support optionnel des documents attachés
+
+#### ⚙️ Configuration
+
+1. **URL Confluence** : L'URL de base de votre instance (ex: `https://confluence.company.com`)
+2. **Clé d'espace** : Le code de l'espace à synchroniser (visible dans l'URL, ex: `PROJ`)
+3. **Identifiant** : Votre nom d'utilisateur Confluence
+4. **Mot de passe / Token API** : Votre mot de passe ou token API personnel
+
+#### 📅 Options de synchronisation
+
+| Option | Description |
+|--------|-------------|
+| **Fréquence** | Quotidien, Hebdomadaire (7j), Bi-mensuel (14j), Mensuel (30j) |
+| **Limite de pages** | Nombre maximum de pages à charger (10-5000) |
+| **Pièces jointes** | Inclure les fichiers attachés aux pages |
+| **Labels à exclure** | Pages avec ces labels ignorées (ex: draft, archive) |
+| **Labels requis** | Seules les pages avec ces labels sont incluses |
+
+#### 🚀 Lancer une synchronisation
+
+1. **Configurez** vos paramètres de connexion
+2. **Testez** la connexion avec le bouton "🔌 Tester la connexion"
+3. **Sauvegardez** la configuration
+4. **Sélectionnez** la base FAISS cible
+5. **Lancez** la synchronisation :
+   - **Complète** : recharge toutes les pages
+   - **Incrémentale** : ne charge que les nouvelles/modifiées
+
+#### 📊 Statut de synchronisation
+
+Le système affiche :
+- Date de la dernière synchronisation
+- Prochaine synchronisation recommandée
+- Indicateur si une synchro est nécessaire
+
+> 💡 **Conseil** : Créez une base FAISS dédiée pour chaque espace Confluence (ex: `confluence_projet`)
+
+---
+
+### 🗑️ **Onglet 4 : Purge des bases**
 
 Supprimez tout le contenu d'une base (les collections sont vidées mais pas supprimées).
 
@@ -291,7 +340,7 @@ Supprimez tout le contenu d'une base (les collections sont vidées mais pas supp
 
 ---
 
-### ❓ **Onglet 4 : Questions RAG**
+### ❓ **Onglet 5 : Questions RAG**
 
 Posez des questions sur vos documents indexés et obtenez des réponses contextuelles.
 
@@ -386,7 +435,7 @@ Un champ texte s'affiche pour décrire la **réponse que vous attendiez**. Cette
 
 ---
 
-### 📊 **Onglet 5 : Tableau de bord analytique**
+### 📊 **Onglet 6 : Tableau de bord analytique**
 
 Visualisez les statistiques et tendances des retours utilisateurs.
 
@@ -448,6 +497,26 @@ Visualisez les statistiques et tendances des retours utilisateurs.
 - **Mistral 7B** : https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3
 - **Qwen 2.5 3B** : https://huggingface.co/Qwen/Qwen2.5-3B-Instruct
 - **BGE-Reranker** : https://huggingface.co/BAAI/bge-reranker-v2-m3
+
+### Confluence
+
+**Q : Comment synchroniser un espace Confluence ?**
+- Allez dans l'onglet **"🔗 Confluence"**
+- Entrez l'URL de votre Confluence, la clé d'espace, identifiant et mot de passe
+- Testez la connexion puis lancez la synchronisation
+
+**Q : Quelle est la fréquence de synchronisation recommandée ?**
+- **Hebdomadaire** est recommandé pour la plupart des espaces
+- Utilisez **quotidien** pour les espaces très actifs
+- Utilisez **mensuel** pour les espaces d'archives
+
+**Q : Comment filtrer les pages Confluence ?**
+- Utilisez les **labels à exclure** pour ignorer les brouillons (ex: `draft, archive`)
+- Utilisez les **labels requis** pour ne charger que certaines pages (ex: `publié`)
+
+**Q : Où sont stockées mes identifiants Confluence ?**
+- Dans le fichier `confluence_config.json` du répertoire de configuration
+- Les mots de passe sont stockés localement (non partagés sur le réseau)
 
 ### Installation et Réseau
 
@@ -599,6 +668,12 @@ Pour toute question ou problème, contactez l'équipe de développement RaGME_UP
 ### 🌐 Double mode : API ou Local
 - ✅ **Mode API** : Snowflake, DALLEM, BGE Reranker (cloud)
 - ✅ **Mode Local** : BGE-M3, Mistral/Qwen, BGE-Reranker (GPU)
+
+### 🔗 Ingestion Confluence (NOUVEAU)
+- 📥 Synchronisation d'espaces Confluence entiers
+- 📅 Planification hebdomadaire/quotidienne/mensuelle
+- 🏷️ Filtrage par labels (inclure/exclure)
+- 📎 Support des pièces jointes optionnel
 
 ### 🧠 Chunking Adaptatif Intelligent
 - 📊 **Analyse de densité** : détection automatique du type de contenu

@@ -42,6 +42,19 @@ from xml_processing import (
     preview_sections,
 )
 
+# Import Confluence (optionnel)
+try:
+    from confluence_connector import (
+        ConfluenceConfig,
+        ConfluenceClient,
+        ConfluenceSyncManager,
+        check_dependencies as check_confluence_deps,
+        format_sync_status,
+    )
+    HAS_CONFLUENCE = True
+except ImportError:
+    HAS_CONFLUENCE = False
+
 # Optionnel : fonction d'extraction des pièces jointes PDF si disponible
 try:
     from pdf_processing import extract_attachments_from_pdf
@@ -514,12 +527,12 @@ current_user = getpass.getuser().lower()
 
 # Créer les tabs conditionnellement
 if current_user in ANALYTICS_AUTHORIZED_USERS:
-    tab_csv, tab_ingest, tab_purge, tab_rag, tab_analytics = st.tabs(
-        ["📝 Gestion CSV", "📥 Ingestion documents", "🗑️ Purge des bases", "❓ Questions RAG", "📊 Tableau de bord"]
+    tab_csv, tab_ingest, tab_confluence, tab_purge, tab_rag, tab_analytics = st.tabs(
+        ["📝 Gestion CSV", "📥 Ingestion documents", "🔗 Confluence", "🗑️ Purge des bases", "❓ Questions RAG", "📊 Tableau de bord"]
     )
 else:
-    tab_csv, tab_ingest, tab_purge, tab_rag = st.tabs(
-        ["📝 Gestion CSV", "📥 Ingestion documents", "🗑️ Purge des bases", "❓ Questions RAG"]
+    tab_csv, tab_ingest, tab_confluence, tab_purge, tab_rag = st.tabs(
+        ["📝 Gestion CSV", "📥 Ingestion documents", "🔗 Confluence", "🗑️ Purge des bases", "❓ Questions RAG"]
     )
     tab_analytics = None  # Pas d'accès au tableau de bord
 
@@ -1295,6 +1308,340 @@ with tab_ingest:
 
                 # Masquer le bouton stop
                 stop_button_placeholder.empty()
+
+
+# ========================
+#   TAB CONFLUENCE
+# ========================
+with tab_confluence:
+    st.subheader("🔗 Ingestion Confluence")
+
+    if not HAS_CONFLUENCE:
+        st.error("❌ Module Confluence non disponible")
+        st.info("Le module `confluence_connector.py` n'a pas pu être chargé.")
+    else:
+        # Vérifier les dépendances
+        deps_ok, missing_deps = check_confluence_deps()
+        if not deps_ok:
+            st.error(f"❌ Dépendances manquantes : {', '.join(missing_deps)}")
+            st.code(f"pip install {' '.join(missing_deps)}", language="bash")
+        else:
+            st.markdown("""
+            Cette page vous permet de synchroniser un **espace Confluence entier** vers le système RAG.
+
+            **Fonctionnalités :**
+            - 📥 Chargement de toutes les pages d'un espace
+            - 🔄 Synchronisation hebdomadaire automatique
+            - 🏷️ Filtrage par labels
+            - 📎 Support des pièces jointes (optionnel)
+            """)
+
+            # Initialiser le gestionnaire de sync
+            confluence_config_dir = os.path.join(FEEDBACK_DIR, 'confluence') if FEEDBACK_DIR else None
+
+            if not confluence_config_dir:
+                st.warning("⚠️ Répertoire de configuration non disponible. Configurez d'abord les répertoires de stockage.")
+            else:
+                sync_manager = ConfluenceSyncManager(confluence_config_dir)
+                conf_config = sync_manager.load_config()
+
+                st.markdown("---")
+                st.markdown("### ⚙️ Configuration de connexion")
+
+                # Formulaire de configuration
+                with st.form("confluence_config_form"):
+                    col_url, col_space = st.columns(2)
+
+                    with col_url:
+                        conf_url = st.text_input(
+                            "🌐 URL Confluence",
+                            value=conf_config.base_url,
+                            placeholder="https://confluence.company.com",
+                            help="URL de base de votre instance Confluence"
+                        )
+
+                    with col_space:
+                        conf_space = st.text_input(
+                            "📁 Clé d'espace",
+                            value=conf_config.space_key,
+                            placeholder="PROJ",
+                            help="Clé de l'espace Confluence (visible dans l'URL de l'espace)"
+                        )
+
+                    col_user, col_pass = st.columns(2)
+
+                    with col_user:
+                        conf_user = st.text_input(
+                            "👤 Identifiant",
+                            value=conf_config.username,
+                            placeholder="votre.identifiant",
+                            help="Votre identifiant Confluence"
+                        )
+
+                    with col_pass:
+                        conf_pass = st.text_input(
+                            "🔑 Mot de passe / Token API",
+                            value=conf_config.password,
+                            type="password",
+                            placeholder="••••••••",
+                            help="Mot de passe ou token API personnel"
+                        )
+
+                    st.markdown("#### Options de synchronisation")
+
+                    col_opt1, col_opt2, col_opt3 = st.columns(3)
+
+                    with col_opt1:
+                        conf_freq = st.selectbox(
+                            "📅 Fréquence de synchro",
+                            options=[1, 7, 14, 30],
+                            index=[1, 7, 14, 30].index(conf_config.sync_frequency_days) if conf_config.sync_frequency_days in [1, 7, 14, 30] else 1,
+                            format_func=lambda x: f"Tous les {x} jour(s)" if x > 1 else "Quotidien",
+                            help="Fréquence de synchronisation automatique"
+                        )
+
+                    with col_opt2:
+                        conf_limit = st.number_input(
+                            "📄 Limite de pages",
+                            min_value=10,
+                            max_value=5000,
+                            value=conf_config.page_limit,
+                            step=50,
+                            help="Nombre maximum de pages à charger"
+                        )
+
+                    with col_opt3:
+                        conf_attachments = st.checkbox(
+                            "📎 Inclure pièces jointes",
+                            value=conf_config.include_attachments,
+                            help="Inclure les pièces jointes des pages"
+                        )
+
+                    col_labels = st.columns(2)
+
+                    with col_labels[0]:
+                        conf_exclude_labels = st.text_input(
+                            "🚫 Labels à exclure (séparés par virgule)",
+                            value=", ".join(conf_config.exclude_labels),
+                            placeholder="draft, archive, obsolete",
+                            help="Pages avec ces labels seront ignorées"
+                        )
+
+                    with col_labels[1]:
+                        conf_include_labels = st.text_input(
+                            "✅ Labels requis (séparés par virgule)",
+                            value=", ".join(conf_config.include_only_labels),
+                            placeholder="",
+                            help="Si renseigné, seules les pages avec ces labels seront incluses"
+                        )
+
+                    col_btn1, col_btn2 = st.columns(2)
+
+                    with col_btn1:
+                        save_config_btn = st.form_submit_button(
+                            "💾 Sauvegarder la configuration",
+                            use_container_width=True
+                        )
+
+                    with col_btn2:
+                        test_connection_btn = st.form_submit_button(
+                            "🔌 Tester la connexion",
+                            use_container_width=True
+                        )
+
+                # Traitement du formulaire
+                if save_config_btn or test_connection_btn:
+                    # Mettre à jour la config
+                    new_config = ConfluenceConfig(
+                        base_url=conf_url.strip(),
+                        username=conf_user.strip(),
+                        password=conf_pass,
+                        space_key=conf_space.strip().upper(),
+                        sync_frequency_days=conf_freq,
+                        page_limit=conf_limit,
+                        include_attachments=conf_attachments,
+                        exclude_labels=[l.strip() for l in conf_exclude_labels.split(",") if l.strip()],
+                        include_only_labels=[l.strip() for l in conf_include_labels.split(",") if l.strip()],
+                        last_sync=conf_config.last_sync
+                    )
+
+                    # Valider
+                    is_valid, error_msg = new_config.is_valid()
+
+                    if not is_valid:
+                        st.error(f"❌ Configuration invalide : {error_msg}")
+                    else:
+                        if save_config_btn:
+                            if sync_manager.save_config(new_config):
+                                st.success("✅ Configuration sauvegardée !")
+                                conf_config = new_config
+                            else:
+                                st.error("❌ Erreur lors de la sauvegarde")
+
+                        if test_connection_btn:
+                            with st.spinner("Test de connexion en cours..."):
+                                client = ConfluenceClient(new_config)
+                                success, message = client.test_connection()
+
+                                if success:
+                                    st.success(f"✅ {message}")
+
+                                    # Afficher les infos de l'espace
+                                    space_info = client.get_space_info()
+                                    if space_info:
+                                        st.info(f"📁 **Espace** : {space_info.get('name', 'N/A')}")
+                                        desc = space_info.get('description', {}).get('plain', {}).get('value', '')
+                                        if desc:
+                                            st.caption(f"Description : {desc[:200]}...")
+                                else:
+                                    st.error(f"❌ {message}")
+
+                # Statut de synchronisation
+                st.markdown("---")
+                st.markdown("### 📊 Statut de synchronisation")
+
+                col_status1, col_status2 = st.columns(2)
+
+                with col_status1:
+                    sync_status = format_sync_status(conf_config)
+                    st.info(f"🕐 {sync_status}")
+
+                with col_status2:
+                    if conf_config.should_sync():
+                        st.warning("⚠️ Synchronisation recommandée")
+                    else:
+                        st.success("✅ À jour")
+
+                # Bouton de synchronisation
+                st.markdown("---")
+                st.markdown("### 🚀 Lancer la synchronisation")
+
+                # Sélection de la base cible
+                target_base = st.selectbox(
+                    "📂 Base FAISS cible",
+                    options=bases if bases else ["(Aucune base disponible)"],
+                    help="Base FAISS dans laquelle ingérer les pages Confluence"
+                )
+
+                col_sync1, col_sync2 = st.columns(2)
+
+                with col_sync1:
+                    full_sync_btn = st.button(
+                        "🔄 Synchronisation complète",
+                        type="primary",
+                        use_container_width=True,
+                        help="Recharge toutes les pages de l'espace",
+                        disabled=not conf_config.is_valid()[0] or not bases
+                    )
+
+                with col_sync2:
+                    incremental_sync_btn = st.button(
+                        "📥 Synchronisation incrémentale",
+                        use_container_width=True,
+                        help="Ne charge que les pages nouvelles ou modifiées",
+                        disabled=not conf_config.is_valid()[0] or not bases
+                    )
+
+                # Exécution de la synchronisation
+                if full_sync_btn or incremental_sync_btn:
+                    is_valid, error_msg = conf_config.is_valid()
+                    if not is_valid:
+                        st.error(f"❌ Configuration invalide : {error_msg}")
+                    elif not bases:
+                        st.error("❌ Aucune base FAISS disponible")
+                    else:
+                        st.markdown("---")
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        log_container = st.container()
+
+                        def update_progress(current, total, message):
+                            if total > 0:
+                                progress_bar.progress(min(current / total, 1.0))
+                            status_text.text(message)
+
+                        try:
+                            # Créer le client
+                            status_text.text("🔌 Connexion à Confluence...")
+                            client = ConfluenceClient(conf_config)
+
+                            # Récupérer les pages
+                            status_text.text(f"📥 Récupération des pages de l'espace {conf_config.space_key}...")
+                            pages = client.get_all_pages(progress_callback=update_progress)
+
+                            if not pages:
+                                st.warning("⚠️ Aucune page trouvée dans l'espace")
+                            else:
+                                with log_container:
+                                    st.success(f"✅ {len(pages)} pages récupérées")
+
+                                # Préparer les fichiers pour l'ingestion
+                                status_text.text("📝 Préparation des fichiers...")
+                                import tempfile
+                                temp_dir = tempfile.mkdtemp(prefix="confluence_")
+
+                                csv_path = sync_manager.prepare_for_ingestion(pages, temp_dir)
+
+                                with log_container:
+                                    st.info(f"📄 CSV généré : {csv_path}")
+
+                                # Lancer l'ingestion
+                                status_text.text("🚀 Ingestion dans FAISS...")
+                                db_path = os.path.join(BASE_ROOT_DIR, target_base)
+                                collection_name = f"confluence_{conf_config.space_key}"
+
+                                # Charger le CSV et ingérer
+                                file_paths = []
+                                groups = []
+                                with open(csv_path, 'r', encoding='utf-8') as f:
+                                    import csv as csv_module
+                                    reader = csv_module.DictReader(f)
+                                    for row in reader:
+                                        file_paths.append(row['path'])
+                                        groups.append(row.get('group', collection_name))
+
+                                # Ingestion
+                                result = ingest_documents(
+                                    db_path=db_path,
+                                    collection_name=collection_name,
+                                    file_paths=file_paths,
+                                    log=logger
+                                )
+
+                                # Mettre à jour la date de dernière synchro
+                                conf_config.last_sync = datetime.now().isoformat()
+                                sync_manager.save_config(conf_config)
+
+                                # Sauvegarder l'état de sync
+                                sync_state = {
+                                    'pages': {p['id']: {'content_hash': p['content_hash'], 'title': p['title']} for p in pages},
+                                    'last_full_sync': datetime.now().isoformat()
+                                }
+                                sync_manager.save_sync_state(sync_state)
+
+                                # Afficher les résultats
+                                progress_bar.progress(1.0)
+                                status_text.text("✅ Synchronisation terminée !")
+
+                                with log_container:
+                                    st.success(f"""
+                                    **Résumé de la synchronisation :**
+                                    - 📄 Pages traitées : {len(pages)}
+                                    - ✅ Documents ingérés : {len(result.get('ingested', []))}
+                                    - ⏭️ Documents ignorés : {len(result.get('skipped', []))}
+                                    - ❌ Erreurs : {len(result.get('errors', []))}
+                                    """)
+
+                                # Nettoyer les fichiers temporaires
+                                try:
+                                    import shutil
+                                    shutil.rmtree(temp_dir)
+                                except:
+                                    pass
+
+                        except Exception as e:
+                            st.error(f"❌ Erreur lors de la synchronisation : {str(e)}")
+                            logger.exception("Erreur synchronisation Confluence")
 
 
 # ========================
