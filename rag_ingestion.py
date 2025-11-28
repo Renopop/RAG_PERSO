@@ -16,10 +16,20 @@ from models_utils import (
     BATCH_SIZE,
     DirectOpenAIEmbeddings,
     embed_in_batches,
+    embed_texts_unified,
     SNOWFLAKE_API_KEY,
     SNOWFLAKE_API_BASE,
     create_http_client,
 )
+
+# Import de la configuration pour le mode local
+try:
+    from config_manager import is_local_mode
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    def is_local_mode():
+        return False
 
 from pdf_processing import extract_text_from_pdf, extract_attachments_from_pdf
 from docx_processing import extract_text_from_docx
@@ -465,14 +475,28 @@ def ingest_documents(
         if progress_callback:
             progress_callback(0.6, f"🧠 Embedding {len(all_chunks)} chunks...")
 
-        embeddings = embed_in_batches(
-            texts=all_chunks,
-            role="doc",
-            batch_size=BATCH_SIZE,
-            emb_client=emb_client,
-            log=_log,
-            dry_run=False,
-        )
+        # Utiliser les embeddings locaux si le mode local est activé
+        use_local = is_local_mode() if CONFIG_AVAILABLE else False
+
+        if use_local:
+            _log.info("[INGEST] Utilisation des embeddings LOCAUX (BGE-M3)")
+            embeddings = embed_texts_unified(
+                texts=all_chunks,
+                role="passage",  # "passage" pour les documents
+                batch_size=BATCH_SIZE,
+                log=_log,
+                use_local=True,
+            )
+        else:
+            _log.info("[INGEST] Utilisation des embeddings API (Snowflake)")
+            embeddings = embed_in_batches(
+                texts=all_chunks,
+                role="doc",
+                batch_size=BATCH_SIZE,
+                emb_client=emb_client,
+                log=_log,
+                dry_run=False,
+            )
 
         # Push to FAISS in batches
         max_batch = 4000
