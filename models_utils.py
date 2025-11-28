@@ -679,13 +679,23 @@ class UnifiedEmbeddings:
     def _init_local(self):
         """Initialise le client d'embeddings local."""
         try:
+            # Diagnostic: vérifier la configuration du manager
+            self.log.info(f"[EMB] Tentative d'initialisation locale...")
+            self.log.info(f"[EMB] local_models_manager.embedding_path = {local_models_manager.embedding_path}")
+            self.log.info(f"[EMB] local_models_manager.has_embedding_model() = {local_models_manager.has_embedding_model()}")
+
             self._local_embeddings = local_models_manager.get_embeddings()
             if self._local_embeddings is None:
-                self.log.warning("[EMB] Modèle local non disponible, fallback API")
+                self.log.warning("[EMB] Modèle local non disponible (get_embeddings() a retourné None), fallback API")
+                self.log.warning(f"[EMB] Vérifiez que le chemin existe: {local_models_manager.embedding_path}")
                 self.use_local = False
                 self._init_api()
+            else:
+                self.log.info(f"[EMB] ✅ Modèle local chargé avec succès, dimension={self._local_embeddings.dimension}")
         except Exception as e:
             self.log.error(f"[EMB] Erreur init local: {e}")
+            import traceback
+            self.log.error(traceback.format_exc())
             self.use_local = False
             self._init_api()
 
@@ -797,14 +807,19 @@ def embed_texts_unified(
     if use_local is None:
         use_local = is_local_mode() if CONFIG_AVAILABLE else False
 
+    log.info(f"[EMB] use_local={use_local}, LOCAL_MODELS_AVAILABLE={LOCAL_MODELS_AVAILABLE}")
+
     if use_local and LOCAL_MODELS_AVAILABLE:
         log.info(f"[EMB] Mode local, role={role}, n={len(texts)}")
+        log.info(f"[EMB] local_models_manager.embedding_path = {local_models_manager.embedding_path}")
+
         embeddings_client = local_models_manager.get_embeddings()
 
         if embeddings_client is None:
-            log.warning("[EMB] Modèle local non disponible, fallback API")
+            log.warning(f"[EMB] Modèle local non disponible (path={local_models_manager.embedding_path}), fallback API")
             use_local = False
         else:
+            log.info(f"[EMB] ✅ Utilisation du modèle local d'embeddings")
             if role == "query":
                 result = embeddings_client.embed_queries(texts)
             else:
