@@ -752,17 +752,30 @@ def initialize_local_models_if_needed():
     """
     config = load_config()
 
+    print(f"[CONFIG] Mode actuel: {config.model_mode}")
+    print(f"[CONFIG] Config file exists: {os.path.exists(CONFIG_FILE)}")
+
     if not config.is_local_mode():
+        print("[CONFIG] Mode API activé, pas d'initialisation des modèles locaux")
         return
 
     try:
-        from local_models import configure_local_models
+        from local_models import configure_local_models, local_models_manager
 
         # Récupérer le chemin et le type du LLM sélectionné
         llm_path = config.get_selected_llm_path()
         llm_type = config.get_selected_llm_type()
         llm_info = AVAILABLE_LOCAL_LLMS.get(config.selected_llm, {})
         llm_name = llm_info.get("name", config.selected_llm)
+
+        print(f"[CONFIG] Configuration des modèles locaux:")
+        print(f"  - Embeddings: {config.local_embedding_path}")
+        print(f"  - Embeddings existe: {os.path.exists(config.local_embedding_path) if config.local_embedding_path else 'N/A'}")
+        print(f"  - LLM ({llm_name}): {llm_path}")
+        print(f"  - LLM existe: {os.path.exists(llm_path) if llm_path else 'N/A'}")
+        print(f"  - LLM Type: {llm_type}")
+        print(f"  - Reranker: {config.local_reranker_path}")
+        print(f"  - Reranker existe: {os.path.exists(config.local_reranker_path) if config.local_reranker_path else 'N/A'}")
 
         configure_local_models(
             embedding_path=config.local_embedding_path,
@@ -771,13 +784,15 @@ def initialize_local_models_if_needed():
             llm_type=llm_type
         )
 
-        print(f"[CONFIG] Modèles locaux configurés:")
-        print(f"  - Embeddings: {config.local_embedding_path}")
-        print(f"  - LLM ({llm_name}): {llm_path}")
-        print(f"  - LLM Type: {llm_type}")
-        print(f"  - Reranker: {config.local_reranker_path}")
+        # Vérifier que les chemins ont bien été configurés
+        print(f"[CONFIG] local_models_manager.embedding_path = {local_models_manager.embedding_path}")
+        print(f"[CONFIG] local_models_manager.llm_path = {local_models_manager.llm_path}")
+        print(f"[CONFIG] local_models_manager.llm_type = {local_models_manager.llm_type}")
+        print(f"[CONFIG] Modèles locaux configurés avec succès")
 
     except ImportError as e:
         print(f"[CONFIG] Impossible de charger le module local_models: {e}")
     except Exception as e:
         print(f"[CONFIG] Erreur lors de l'initialisation des modèles locaux: {e}")
+        import traceback
+        traceback.print_exc()

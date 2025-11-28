@@ -176,6 +176,7 @@ def _run_rag_query_single_collection(
             model=LLM_MODEL,
             num_variations=num_query_variations,
             log=_log,
+            use_local=use_local_models,
         )
 
         # Fonction d'embedding pour multi-query (unifié: local ou API)

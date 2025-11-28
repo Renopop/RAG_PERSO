@@ -39,7 +39,8 @@ def expand_query_with_llm(
     api_base: str,
     model: str,
     num_variations: int = 3,
-    log=None
+    log=None,
+    use_local: Optional[bool] = None
 ) -> List[str]:
     """
     Génère des variations de la question originale pour améliorer le recall.
@@ -53,6 +54,7 @@ def expand_query_with_llm(
         model: Nom du modèle
         num_variations: Nombre de variations à générer
         log: Logger optionnel
+        use_local: Force le mode local (True) ou API (False). Si None, utilise la config.
 
     Returns:
         Liste de questions (originale + variations)
@@ -61,6 +63,10 @@ def expand_query_with_llm(
 
     # Toujours inclure la question originale
     queries = [question]
+
+    # Déterminer le mode
+    if use_local is None:
+        use_local = is_local_mode() if CONFIG_AVAILABLE else False
 
     system_prompt = """Tu es un expert en reformulation de questions pour la recherche documentaire.
 Génère des variations de la question qui pourraient aider à trouver des documents pertinents.
@@ -77,26 +83,50 @@ Réponds UNIQUEMENT avec les variations, une par ligne, sans numérotation ni ex
 Génère {num_variations} variations de cette question pour améliorer la recherche:"""
 
     try:
-        url = api_base.rstrip("/") + "/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.7,
-            "max_tokens": 300,
-        }
+        content = ""
 
-        resp = http_client.post(url, headers=headers, json=payload, timeout=30.0)
-        resp.raise_for_status()
-        data = resp.json()
+        # Mode local: utiliser le LLM local
+        if use_local and LOCAL_RERANKER_AVAILABLE:
+            _log.info("[QUERY-EXPAND] Utilisation du LLM local")
+            try:
+                llm = local_models_manager.get_llm()
+                if llm is not None:
+                    content = llm.generate(
+                        prompt=user_prompt,
+                        system_prompt=system_prompt,
+                        max_new_tokens=300,
+                        temperature=0.7
+                    )
+                    _log.info("[QUERY-EXPAND] ✅ Expansion via LLM local")
+                else:
+                    _log.warning("[QUERY-EXPAND] LLM local non disponible, fallback API")
+                    use_local = False
+            except Exception as e:
+                _log.warning(f"[QUERY-EXPAND] Erreur LLM local ({e}), fallback API")
+                use_local = False
 
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        # Mode API: utiliser l'API DALLEM
+        if not use_local or not content:
+            url = api_base.rstrip("/") + "/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 300,
+            }
+
+            resp = http_client.post(url, headers=headers, json=payload, timeout=30.0)
+            resp.raise_for_status()
+            data = resp.json()
+
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
         if content:
             # Parser les variations (une par ligne)

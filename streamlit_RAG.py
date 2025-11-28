@@ -70,6 +70,14 @@ logger = make_logger(debug=False)
 
 
 # =====================================================================
+#  INITIALISATION DES MODÈLES LOCAUX AU DÉMARRAGE
+# =====================================================================
+# Si le mode local est déjà activé dans la config, on configure les modèles
+# AVANT toute opération pour éviter les erreurs de modèles non configurés.
+initialize_local_models_if_needed()
+
+
+# =====================================================================
 #  CACHE POUR LES RESSOURCES ET REQUÊTES RAG (amélioration performance)
 # =====================================================================
 
@@ -549,7 +557,19 @@ if current_user in allowed_users:
         # Afficher les modèles utilisés selon le mode
         if offline_mode_enabled:
             st.caption("🔹 Mode : **Hors ligne (GPU)**")
-            st.caption("🔹 Embeddings : **BGE-M3**")
+
+            # ========== VÉRIFICATION EMBEDDINGS ==========
+            st.markdown("##### 📐 Embeddings (BGE-M3)")
+            emb_path = current_config.local_embedding_path
+            if emb_path and os.path.exists(emb_path):
+                st.success(f"✅ `{emb_path}`")
+            elif emb_path:
+                st.error(f"❌ Non trouvé: `{emb_path}`")
+            else:
+                st.warning("⚠️ Chemin non configuré")
+
+            # ========== SÉLECTION ET VÉRIFICATION LLM ==========
+            st.markdown("##### 🤖 LLM local")
 
             # Liste déroulante pour sélection du LLM local
             llm_options = list(AVAILABLE_LOCAL_LLMS.keys())
@@ -562,17 +582,26 @@ if current_user in allowed_users:
             current_idx = llm_options.index(current_llm_id)
 
             selected_idx = st.selectbox(
-                "🤖 LLM local",
+                "Modèle LLM",
                 options=range(len(llm_options)),
                 index=current_idx,
                 format_func=lambda i: llm_names[i],
-                help="Choisissez le modèle LLM à utiliser"
+                help="Choisissez le modèle LLM à utiliser",
+                label_visibility="collapsed"
             )
 
             selected_llm_id = llm_options[selected_idx]
             llm_info = AVAILABLE_LOCAL_LLMS[selected_llm_id]
+            llm_path = llm_info.get("path", "")
 
-            # Afficher les infos du LLM sélectionné
+            # Vérification du chemin LLM
+            if llm_path and os.path.exists(llm_path):
+                st.success(f"✅ `{llm_path}`")
+            elif llm_path:
+                st.error(f"❌ Non trouvé: `{llm_path}`")
+            else:
+                st.warning("⚠️ Chemin non configuré")
+
             st.caption(f"   📊 VRAM requise : **{llm_info.get('vram_required_gb', 'N/A')} GB**")
             st.caption(f"   📝 {llm_info.get('description', '')}")
 
@@ -583,15 +612,32 @@ if current_user in allowed_users:
                 save_config(current_config)
                 st.success(f"✅ LLM sélectionné : {llm_info['name']}")
 
-                # Recharger le LLM si nécessaire
+                # Reconfigurer les modèles locaux avec le nouveau LLM
                 try:
-                    from local_models import local_models_manager
-                    if local_models_manager._llm is not None:
-                        local_models_manager.reload_llm(llm_info.get("model_type", "mistral"))
+                    from local_models import local_models_manager, cuda_manager
+                    # Décharger l'ancien LLM pour libérer la VRAM
+                    if local_models_manager.llm_model is not None:
+                        local_models_manager.llm_model = None
+                        cuda_manager.clear_cuda_cache()
+                    # Reconfigurer avec le nouveau chemin et type de LLM
+                    local_models_manager.configure(
+                        llm_path=llm_info.get("path"),
+                        llm_type=llm_info.get("model_type", "mistral")
+                    )
+                    st.info("💡 Le nouveau LLM sera chargé à la prochaine requête")
                 except Exception as e:
-                    st.info("💡 Le LLM sera chargé à la prochaine requête")
+                    st.warning(f"⚠️ Erreur lors de la reconfiguration: {e}")
 
-            st.caption("🔹 Reranker : **BGE-Reranker**")
+            # ========== VÉRIFICATION RERANKER ==========
+            st.markdown("##### 🔄 Reranker (BGE-Reranker)")
+            reranker_path = current_config.local_reranker_path
+            if reranker_path and os.path.exists(reranker_path):
+                st.success(f"✅ `{reranker_path}`")
+            elif reranker_path:
+                st.error(f"❌ Non trouvé: `{reranker_path}`")
+            else:
+                st.warning("⚠️ Chemin non configuré")
+
         else:
             st.caption("🔹 Mode : **API (distant)**")
             st.caption(f"🔹 Embeddings : **Snowflake** – `{EMBED_MODEL}`")
